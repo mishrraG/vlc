@@ -44,9 +44,14 @@ Item {
             return "transparent"
     }
 
+    property bool  isThemeDark: false
+
     property color text: systemPalette.text;
     property color textInactive: systemPalette.textInactive;
     property color textDisabled: systemPalette.textDisabled;
+
+    property color caption: setColorAlpha(text, .4)
+    property color menuCaption: setColorAlpha(text, .6)
 
     property color bg: systemPalette.base;
     property color bgInactive: systemPalette.baseInactive;
@@ -77,6 +82,20 @@ Item {
     property color playerBg: "black"
     property color playerBorder: "#222222"
 
+    property color separator: blendColors(bg, text, .95)
+    
+    property color roundPlayCoverBorder: "#979797"
+
+    property color playlistSeparator: colors_id.white
+
+    // basic color definitions for color blending:
+    property color black: "black"
+    property color white: "white"
+
+    // glow colors:
+    property color glowColor: setColorAlpha(blendColors(bg, black, 0.8), 0.35)
+    property color glowColorBanner: setColorAlpha(blendColors(banner, black, isThemeDark ? 0.25 : 0.35), 0.25)
+
     //vlc orange
     property color accent: "#FFFF950D";
 
@@ -105,7 +124,7 @@ Item {
                 bgAlt: "#eff0f1"
                 bgAltInactive: "#eff0f1"
 
-                bgHover: "#3daee9"
+                bgHover: "#ededed"
                 bgHoverInactive: "#3daee9"
 
                 button: "#eff0f1";
@@ -119,6 +138,9 @@ Item {
 
                 accent: "#ff950d";
                 alert: "#ff0000";
+                separator: "#ededed";
+
+                isThemeDark: false;
             }
         },
         State {
@@ -132,7 +154,7 @@ Item {
                 bgInactive: "#232629"
                 bgAlt: "#31363b"
                 bgAltInactive: "#31363b"
-                bgHover: "#3daee9"
+                bgHover: "#2d2d2d"
                 bgHoverInactive: "#3daee9"
                 button: "#31363b"
                 buttonText: "#eff0f1"
@@ -142,6 +164,8 @@ Item {
                 bannerHover: "#3daee9"
                 accent: "#ff950d"
                 alert: "#ff0000"
+                separator: "#2d2d2d"
+                isThemeDark: true
             }
         },
         State {
@@ -169,6 +193,10 @@ Item {
                 textActiveSource: accent
                 banner: systemPalette.window
                 bannerHover: systemPalette.highlight
+
+                separator: blendColors(bg, text, .95)
+
+                isThemeDark: systemPalette.isDark
             }
         }
     ]

@@ -25,6 +25,7 @@ enum Role {
     VIDEO_TITLE,
     VIDEO_THUMBNAIL,
     VIDEO_DURATION,
+    VIDEO_DURATION_SHORT,
     VIDEO_PROGRESS,
     VIDEO_PLAYCOUNT,
     VIDEO_RESOLUTION,
@@ -66,6 +67,8 @@ QVariant MLVideoModel::data(const QModelIndex& index, int role) const
             return QVariant::fromValue( video->getThumbnail() );
         case VIDEO_DURATION:
             return QVariant::fromValue( video->getDuration() );
+        case VIDEO_DURATION_SHORT:
+            return QVariant::fromValue( video->getDurationShort() );
         case VIDEO_PROGRESS:
             return QVariant::fromValue( video->getProgress() );
         case VIDEO_PLAYCOUNT:
@@ -97,6 +100,7 @@ QHash<int, QByteArray> MLVideoModel::roleNames() const
         { VIDEO_TITLE, "title" },
         { VIDEO_THUMBNAIL, "thumbnail" },
         { VIDEO_DURATION, "duration" },
+        { VIDEO_DURATION_SHORT, "durationShort" },
         { VIDEO_PROGRESS, "progress" },
         { VIDEO_PLAYCOUNT, "playcount" },
         { VIDEO_RESOLUTION, "resolution_name" },
@@ -172,12 +176,4 @@ void MLVideoModel::onVlcMlEvent(const vlc_ml_event_t* event)
 void MLVideoModel::thumbnailUpdated(int idx)
 {
     emit dataChanged(index(idx), index(idx), {VIDEO_THUMBNAIL});
-}
-
-QString MLVideoModel::getFirstSymbol( const QString& str )
-{
-    QString ret("#");
-    if ( str.length() > 0 && str[0].isLetter() )
-        ret = str[0].toUpper();
-    return ret;
 }

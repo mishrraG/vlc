@@ -295,6 +295,10 @@ static inline char *getenv (const char *name)
 }
 #endif
 
+#ifdef __cplusplus
+extern "C" {
+#endif
+
 #ifndef HAVE_SETENV
 int setenv (const char *, const char *, int);
 int unsetenv (const char *);
@@ -306,6 +310,10 @@ int posix_memalign(void **, size_t, size_t);
 
 #ifndef HAVE_ALIGNED_ALLOC
 void *aligned_alloc(size_t, size_t);
+#endif
+
+#ifdef __cplusplus
+} /* extern "C" */
 #endif
 
 #if defined (_WIN32) && defined(__MINGW32__)
@@ -454,6 +462,14 @@ struct msghdr
     size_t        msg_controllen;
     int           msg_flags;
 };
+
+# ifndef HAVE_IF_NAMETOINDEX
+#  include <stdlib.h> /* a define may change from the real atoi declaration */
+static inline int if_nametoindex(const char *name)
+{
+    return atoi(name);
+}
+# endif
 #endif
 
 #ifdef _NEWLIB_VERSION
@@ -489,7 +505,7 @@ typedef enum {
 } VISIT;
 
 void *tsearch( const void *key, void **rootp, int(*cmp)(const void *, const void *) );
-void *tfind( const void *key, const void **rootp, int(*cmp)(const void *, const void *) );
+void *tfind( const void *key, void * const *rootp, int(*cmp)(const void *, const void *) );
 void *tdelete( const void *key, void **rootp, int(*cmp)(const void *, const void *) );
 void twalk( const void *root, void(*action)(const void *nodep, VISIT which, int depth) );
 void *lfind( const void *key, const void *base, size_t *nmemb,

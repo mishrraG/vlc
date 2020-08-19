@@ -156,6 +156,8 @@ private:
                    const char* pattern, uint32_t nbItems, uint32_t offset, va_list args );
     int listPlaylist( int listQuery, const medialibrary::QueryParameters* paramsPtr,
                       const char* pattern, uint32_t nbItems, uint32_t offset, va_list args );
+    int listMedia( int listQuery, const medialibrary::QueryParameters* paramsPtr,
+                   const char* pattern, uint32_t nbItems, uint32_t offset, va_list args );
 
     static medialibrary::IMedia::MetadataType metadataType( int meta );
     static medialibrary::SortingCriteria sortingCriteria( int sort );
@@ -168,23 +170,26 @@ private:
     // IMediaLibraryCb interface
 public:
     virtual void onMediaAdded(std::vector<medialibrary::MediaPtr> media) override;
-    virtual void onMediaModified(std::vector<int64_t> media) override;
-    virtual void onMediaDeleted(std::vector<int64_t> mediaIds) override;
+    virtual void onMediaModified(std::set<int64_t> media) override;
+    virtual void onMediaDeleted(std::set<int64_t> mediaIds) override;
     virtual void onArtistsAdded(std::vector<medialibrary::ArtistPtr> artists) override;
-    virtual void onArtistsModified(std::vector<int64_t> artists) override;
-    virtual void onArtistsDeleted(std::vector<int64_t> artistsIds) override;
+    virtual void onArtistsModified(std::set<int64_t> artists) override;
+    virtual void onArtistsDeleted(std::set<int64_t> artistsIds) override;
     virtual void onAlbumsAdded(std::vector<medialibrary::AlbumPtr> albums) override;
-    virtual void onAlbumsModified(std::vector<int64_t> albums) override;
-    virtual void onAlbumsDeleted(std::vector<int64_t> albumsIds) override;
+    virtual void onAlbumsModified(std::set<int64_t> albums) override;
+    virtual void onAlbumsDeleted(std::set<int64_t> albumsIds) override;
     virtual void onPlaylistsAdded(std::vector<medialibrary::PlaylistPtr> playlists) override;
-    virtual void onPlaylistsModified(std::vector<int64_t> playlists) override;
-    virtual void onPlaylistsDeleted(std::vector<int64_t> playlistIds) override;
+    virtual void onPlaylistsModified(std::set<int64_t> playlists) override;
+    virtual void onPlaylistsDeleted(std::set<int64_t> playlistIds) override;
     virtual void onGenresAdded(std::vector<medialibrary::GenrePtr> genres) override;
-    virtual void onGenresModified(std::vector<int64_t> genres) override;
-    virtual void onGenresDeleted(std::vector<int64_t> genreIds) override;
-    virtual void onMediaGroupAdded( std::vector<medialibrary::MediaGroupPtr> mediaGroups ) override;
-    virtual void onMediaGroupModified( std::vector<int64_t> mediaGroupsIds ) override;
-    virtual void onMediaGroupDeleted( std::vector<int64_t> mediaGroupsIds ) override;
+    virtual void onGenresModified(std::set<int64_t> genres) override;
+    virtual void onGenresDeleted(std::set<int64_t> genreIds) override;
+    virtual void onMediaGroupsAdded( std::vector<medialibrary::MediaGroupPtr> mediaGroups ) override;
+    virtual void onMediaGroupsModified( std::set<int64_t> mediaGroupsIds ) override;
+    virtual void onMediaGroupsDeleted( std::set<int64_t> mediaGroupsIds ) override;
+    virtual void onBookmarksAdded( std::vector<medialibrary::BookmarkPtr> bookmarks ) override;
+    virtual void onBookmarksModified( std::set<int64_t> bookmarksIds ) override;
+    virtual void onBookmarksDeleted( std::set<int64_t> bookmarksIds ) override;
     virtual void onDiscoveryStarted(const std::string& entryPoint) override;
     virtual void onDiscoveryProgress(const std::string& entryPoint) override;
     virtual void onDiscoveryCompleted(const std::string& entryPoint, bool success) override;
@@ -215,6 +220,7 @@ bool Convert( const medialibrary::IShow* input, vlc_ml_show_t& output );
 bool Convert( const medialibrary::ILabel* input, vlc_ml_label_t& output );
 bool Convert( const medialibrary::IPlaylist* input, vlc_ml_playlist_t& output );
 bool Convert( const medialibrary::IFolder* input, vlc_ml_entry_point_t& output );
+bool Convert( const medialibrary::IBookmark* input, vlc_ml_bookmark_t& output );
 input_item_t* MediaToInputItem( const medialibrary::IMedia* media );
 
 template <typename To, typename ItemType, typename From>

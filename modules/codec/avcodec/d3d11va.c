@@ -72,26 +72,6 @@ vlc_module_begin()
 vlc_module_end()
 
 #include <initguid.h> /* must be last included to not redefine existing GUIDs */
-
-/* dxva2api.h GUIDs: http://msdn.microsoft.com/en-us/library/windows/desktop/ms697067(v=vs100).aspx
- * assume that they are declared in dxva2api.h */
-#define MS_GUID(name, l, w1, w2, b1, b2, b3, b4, b5, b6, b7, b8)
-
-#ifdef __MINGW32__
-# include <_mingw.h>
-
-# if !defined(__MINGW64_VERSION_MAJOR)
-#  undef MS_GUID
-#  define MS_GUID DEFINE_GUID /* dxva2api.h fails to declare those, redefine as static */
-#  define DXVA2_E_NEW_VIDEO_DEVICE MAKE_HRESULT(1, 4, 4097)
-# else
-#  include <dxva.h>
-# endif
-
-#endif /* __MINGW32__ */
-
-DEFINE_GUID(DXVA_Intel_H264_NoFGT_ClearVideo,       0x604F8E68, 0x4951, 0x4c54, 0x88, 0xFE, 0xAB, 0xD2, 0x5C, 0x15, 0xB3, 0xD6);
-
 DEFINE_GUID(DXVA2_NoEncrypt,                        0x1b81bed0, 0xa0c7, 0x11d3, 0xb9, 0x84, 0x00, 0xc0, 0x4f, 0x2e, 0x73, 0xc5);
 
 struct vlc_va_sys_t
@@ -227,7 +207,7 @@ static int Get(vlc_va_t *va, picture_t *pic, uint8_t **data)
         va_surface_Release(va_surface);
         return VLC_ENOITEM;
     }
-    *data = (uint8_t*)sys->hw_surface[va_surface_GetIndex(va_surface)];
+    data[3] = (uint8_t*)sys->hw_surface[va_surface_GetIndex(va_surface)];
     return VLC_SUCCESS;
 }
 
@@ -415,7 +395,7 @@ static int DxSetupOutput(vlc_va_t *va, const directx_va_mode_t *mode, const vide
     if (!directx_va_canUseDecoder(va, sys->d3d_dev->adapterDesc.VendorId, sys->d3d_dev->adapterDesc.DeviceId,
                                   mode->guid, sys->d3d_dev->WDDM.build))
     {
-        msg_Warn(va, "GPU blacklisted for %s codec", mode->name);
+        msg_Warn(va, "GPU blocklisted for %s codec", mode->name);
         return VLC_EGENERIC;
     }
 

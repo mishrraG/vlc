@@ -270,6 +270,12 @@ libvlc_demux_dec_run_la_LIBADD += \
 	../modules/libtextst_plugin.la \
 	../modules/libsubstx3g_plugin.la
 endif
+if HAVE_ZVBI
+libvlc_demux_dec_run_la_LIBADD += ../modules/libzvbi_plugin.la
+endif
+if HAVE_TELX
+libvlc_demux_dec_run_la_LIBADD += ../modules/libtelx_plugin.la
+endif
 EXTRA_LTLIBRARIES += libvlc_demux_dec_run.la
 
 #
@@ -287,4 +293,13 @@ vlc_demux_dec_libfuzzer_SOURCES = vlc-demux-libfuzzer.c
 vlc_demux_dec_libfuzzer_LDADD = libvlc_demux_dec_run.la
 if HAVE_LIBFUZZER
 noinst_PROGRAMS += vlc-demux-libfuzzer vlc-demux-dec-libfuzzer vlc-demux-run vlc-demux-dec-run
+endif
+
+vlc_ios_SOURCES = iosvlc.m
+vlc_ios_LDFLAGS = $(LDFLAGS_vlc) -Wl,-framework,Foundation,-framework,UIKit
+vlc_ios_LDFLAGS += -Xlinker -rpath -Xlinker "$(libdir)"
+vlc_ios_CFLAGS = -fobjc-arc
+vlc_ios_LDADD = ../lib/libvlc.la ../src/libvlccore.la
+if HAVE_IOS
+noinst_PROGRAMS += vlc-ios
 endif

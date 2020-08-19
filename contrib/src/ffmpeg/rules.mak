@@ -88,7 +88,7 @@ FFMPEGCONF += --enable-thumb
 endif
 endif
 else
-FFMPEGCONF += --optflags=-O0
+FFMPEGCONF += --optflags=-Og
 endif
 
 ifdef HAVE_CROSS_COMPILE
@@ -176,9 +176,6 @@ endif
 ifdef HAVE_WIN32
 ifndef HAVE_VISUALSTUDIO
 DEPS_ffmpeg += wine-headers
-ifndef HAVE_MINGW_W64
-DEPS_ffmpeg += directx
-endif
 endif
 FFMPEGCONF += --target-os=mingw32
 FFMPEGCONF += --enable-w32threads
@@ -222,7 +219,7 @@ ifeq ($(call need_pkg,"libavcodec >= $(FFMPEG_LAVC_MIN) libavformat >= 53.21.0 l
 PKGS_FOUND += ffmpeg
 endif
 
-FFMPEGCONF += --nm="$(NM)" --ar="$(AR)"
+FFMPEGCONF += --nm="$(NM)" --ar="$(AR)" --ranlib="$(RANLIB)"
 
 $(TARBALLS)/ffmpeg-$(FFMPEG_BASENAME).tar.xz:
 	$(call download_git,$(FFMPEG_GITURL),,$(FFMPEG_HASH))
@@ -232,9 +229,7 @@ $(TARBALLS)/ffmpeg-$(FFMPEG_BASENAME).tar.xz:
 	touch $@
 
 ffmpeg: ffmpeg-$(FFMPEG_BASENAME).tar.xz .sum-ffmpeg
-	rm -Rf $@ $@-$(FFMPEG_BASENAME)
-	mkdir -p $@-$(FFMPEG_BASENAME)
-	tar xvJfo "$<" --strip-components=1 -C $@-$(FFMPEG_BASENAME)
+	$(UNPACK)
 ifdef USE_FFMPEG
 	$(APPLY) $(SRC)/ffmpeg/armv7_fixup.patch
 	$(APPLY) $(SRC)/ffmpeg/dxva_vc1_crash.patch

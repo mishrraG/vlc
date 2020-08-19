@@ -750,7 +750,7 @@ static int Mpeg4ReadAudioSpecificConfig(bs_t *s, mpeg4_asc_t *p_cfg, bool b_with
     }
 
     if (b_withext && p_cfg->extension.i_object_type != AOT_AAC_SBR &&
-        bs_remain(s) >= 16 && bs_read(s, 11) == 0x2b7)
+        !bs_eof(s) && bs_read(s, 11) == 0x2b7)
     {
         p_cfg->extension.i_object_type = Mpeg4ReadAudioObjectType(s);
         if (p_cfg->extension.i_object_type == AOT_AAC_SBR)
@@ -758,7 +758,7 @@ static int Mpeg4ReadAudioSpecificConfig(bs_t *s, mpeg4_asc_t *p_cfg, bool b_with
             p_cfg->i_sbr  = bs_read1(s);
             if (p_cfg->i_sbr == 1) {
                 p_cfg->extension.i_samplerate = Mpeg4ReadAudioSamplerate(s);
-                if (bs_remain(s) >= 12 && bs_read(s, 11) == 0x548)
+                if (bs_read(s, 11) == 0x548)
                    p_cfg->i_ps = bs_read1(s);
             }
         }
@@ -796,7 +796,7 @@ static int Mpeg4ReadAudioSpecificConfig(bs_t *s, mpeg4_asc_t *p_cfg, bool b_with
             ppsz_otype[p_cfg->i_object_type], p_cfg->i_object_type,
             p_cfg->i_samplerate, p_cfg->i_channel, p_cfg->i_sbr);
 #endif
-    return VLC_SUCCESS;
+    return bs_error(s) ? VLC_EGENERIC : VLC_SUCCESS;
 }
 
 static uint32_t LatmGetValue(bs_t *s)
@@ -836,11 +836,16 @@ static int LatmReadStreamMuxConfiguration(latm_mux_t *m, bs_t *s)
         if (i_mux_version == 1)
             LatmGetValue(s); /* taraBufferFullness */
 
+    if(bs_eof(s))
+        return -1;
+
     m->b_same_time_framing = bs_read1(s);
     m->i_sub_frames = 1 + bs_read(s, 6);
     m->i_programs = 1 + bs_read(s, 4);
 
     for (uint8_t i_program = 0; i_program < m->i_programs; i_program++) {
+        if(bs_eof(s))
+            return -1;
         m->pi_layers[i_program] = 1+bs_read(s, 3);
 
         for (uint8_t i_layer = 0; i_layer < m->pi_layers[i_program]; i_layer++) {
@@ -901,6 +906,9 @@ static int LatmReadStreamMuxConfiguration(latm_mux_t *m, bs_t *s)
         }
     }
 
+    if(bs_error(s) || bs_eof(s))
+        return -1;
+
     /* other data */
     if (bs_read1(s)) {
         if (i_mux_version == 1)
@@ -919,7 +927,7 @@ static int LatmReadStreamMuxConfiguration(latm_mux_t *m, bs_t *s)
     if (bs_read1(s))
         m->i_crc = bs_read(s, 8);
 
-    return 0;
+    return bs_error(s) ? -1 : 0;
 }
 
 static int LOASParse(decoder_t *p_dec, uint8_t *p_buffer, int i_buffer)
@@ -980,6 +988,9 @@ static int LOASParse(decoder_t *p_dec, uint8_t *p_buffer, int i_buffer)
         else return 0;
     }
 
+    if(bs_eof(&s) && i_buffer)
+        goto truncated;
+
     /* FIXME do we need to split the subframe into independent packet ? */
     if (p_sys->latm.i_sub_frames > 1)
         msg_Err(p_dec, "latm sub frames not yet supported, please send a sample");
@@ -1028,6 +1039,8 @@ static int LOASParse(decoder_t *p_dec, uint8_t *p_buffer, int i_buffer)
                         if (i_accumulated >= i_buffer)
                             return 0;
                         p_buffer[i_accumulated++] = bs_read(&s, 8);
+                        if(bs_error(&s))
+                            goto truncated;
                     }
                 }
             }
@@ -1087,6 +1100,10 @@ static int LOASParse(decoder_t *p_dec, uint8_t *p_buffer, int i_buffer)
     bs_align(&s);
 
     return i_accumulated;
+
+truncated:
+    msg_Warn(p_dec,"Truncated LAOS packet. Wrong format ?");
+    return 0;
 }
 
 /*****************************************************************************

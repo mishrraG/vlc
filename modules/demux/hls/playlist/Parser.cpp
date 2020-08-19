@@ -32,7 +32,6 @@
 #include "../../adaptive/tools/Retrieve.hpp"
 #include "../../adaptive/tools/Helper.h"
 #include "../../adaptive/tools/Conversions.hpp"
-#include "../../adaptive/logic/BufferingLogic.hpp"
 #include "M3U8.hpp"
 #include "Tags.hpp"
 
@@ -146,13 +145,6 @@ void M3U8Parser::createAndFillRepresentation(vlc_object_t *p_obj, BaseAdaptation
     if(rep)
     {
         parseSegments(p_obj, rep, tagslist);
-        if(rep->isLive())
-        {
-            /* avoid update playlist immediately */
-            logic::DefaultBufferingLogic buflogic;
-            uint64_t startseq = buflogic.getStartSegmentNumber(rep);
-            rep->scheduleNextUpdate(startseq);
-        }
         adaptSet->addRepresentation(rep);
     }
 }
@@ -266,16 +258,15 @@ void M3U8Parser::parseSegments(vlc_object_t *, Representation *rep, const std::l
                 segment->setSourceUrl(uritag->getValue().value);
 
                 /* Need to use EXTXTARGETDURATION as default as some can't properly set segment one */
-                double duration = rep->targetDuration;
+                vlc_tick_t nzDuration = vlc_tick_from_sec(rep->targetDuration);
                 if(ctx_extinf)
                 {
                     const Attribute *durAttribute = ctx_extinf->getAttributeByName("DURATION");
                     if(durAttribute)
-                        duration = durAttribute->floatingPoint();
+                        nzDuration = vlc_tick_from_sec(durAttribute->floatingPoint());
                     ctx_extinf = NULL;
                 }
-                const vlc_tick_t nzDuration = vlc_tick_from_sec( duration );
-                segment->duration.Set(duration * (uint64_t) rep->getTimescale());
+                segment->duration.Set(rep->getTimescale().ToScaled(nzDuration));
                 segment->startTime.Set(rep->getTimescale().ToScaled(nzStartTime));
                 nzStartTime += nzDuration;
                 totalduration += nzDuration;
@@ -560,7 +551,11 @@ M3U8 * M3U8Parser::parse(vlc_object_t *p_object, stream_t *p_stream, const std::
             tag->addAttribute(new Attribute("URI", playlisturl));
             createAndFillRepresentation(p_object, adaptSet, tag, tagslist);
             if(!adaptSet->getRepresentations().empty())
+            {
+                adaptSet->getRepresentations().front()->
+                    scheduleNextUpdate(std::numeric_limits<uint64_t>::max(), true);
                 period->addAdaptationSet(adaptSet);
+            }
             else
                 delete adaptSet;
             delete tag;

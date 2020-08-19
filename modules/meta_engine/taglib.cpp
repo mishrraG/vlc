@@ -92,6 +92,7 @@ using namespace TagLib;
 
 
 #include <algorithm>
+#include <limits>
 
 namespace VLCTagLib
 {
@@ -156,6 +157,9 @@ public:
     VlcIostream(stream_t* p_stream)
         : m_stream( p_stream )
         , m_previousPos( 0 )
+        , m_borked( false )
+        , m_seqReadLength( 0 )
+        , m_seqReadLimit( std::numeric_limits<long>::max() )
     {
     }
 
@@ -173,12 +177,16 @@ public:
 
     ByteVector readBlock(ulong length)
     {
+        if(m_borked || m_seqReadLength >= m_seqReadLimit)
+           return ByteVector::null;
         ByteVector res(length, 0);
         ssize_t i_read = vlc_stream_Read( m_stream, res.data(), length);
         if (i_read < 0)
             return ByteVector::null;
         else if ((size_t)i_read != length)
             res.resize(i_read);
+        m_previousPos += i_read;
+        m_seqReadLength += i_read;
         return res;
     }
 
@@ -205,22 +213,39 @@ public:
         return true;
     }
 
+    void setMaxSequentialRead(long s)
+    {
+        m_seqReadLimit = s;
+    }
+
     void seek(long offset, Position p)
     {
         uint64_t pos = 0;
+        long len;
         switch (p)
         {
             case Current:
                 pos = m_previousPos;
                 break;
             case End:
-                pos = length();
+                len = length();
+                if(len > -1)
+                {
+                    pos = len;
+                }
+                else
+                {
+                    m_borked = true;
+                    return;
+                }
                 break;
             default:
                 break;
         }
-        if (vlc_stream_Seek( m_stream, pos + offset ) == 0)
+        m_borked = (vlc_stream_Seek( m_stream, pos + offset ) != 0);
+        if(!m_borked)
             m_previousPos = pos + offset;
+        m_seqReadLength = 0;
     }
 
     void clear()
@@ -248,6 +273,9 @@ public:
 private:
     stream_t* m_stream;
     int64_t m_previousPos;
+    bool m_borked;
+    long m_seqReadLength;
+    long m_seqReadLimit;
 };
 
 static int ExtractCoupleNumberValues( vlc_meta_t* p_meta, const char *psz_value,
@@ -857,7 +885,14 @@ static int ReadMeta( vlc_object_t* p_this)
         p_stream = p_filter;
 
     VlcIostream s( p_stream );
-    f = FileRef( &s );
+#ifndef VLC_PATCHED_TAGLIB_ID3V2_READSTYLE
+    uint64_t dummy;
+    if( vlc_stream_GetSize( p_stream, &dummy ) != VLC_SUCCESS )
+        s.setMaxSequentialRead( 2048 );
+    else
+        s.setMaxSequentialRead( 1024 * 2048 );
+#endif
+    f = FileRef( &s, false, AudioProperties::ReadStyle::Fast );
 
     if( f.isNull() )
         return VLC_EGENERIC;

@@ -18,6 +18,7 @@
 import QtQuick 2.11
 import QtQuick.Controls 2.4
 import QtQuick.Layouts 1.3
+import QtGraphicalEffects 1.0
 import org.videolan.medialib 0.1
 import org.videolan.vlc 0.1
 
@@ -45,12 +46,22 @@ Widgets.NavigableFocusScope {
         medialib.reload()
     }
 
+    /// playlist width properties used for binding after resize:
+    // Binding allows playlist to scale when root width changes *even after playlist is resized*
+    // New supposed width of the playlist = root.width / playlistColumn.__widthFactor
+    // Playlist width difference after playlist resize event: (playlistColumn.__newWidth - playlistColumn.__oldRootWidth / playlistColumn.__widthFactor)
+    // Width factor of the width difference for root width changes: (root.width / playlistColumn.__oldRootWidth)
+    readonly property real playlistDefaultWidth: root.width / playlistColumn.__widthFactor
+    readonly property real playlistBindingWidth: playlistDefaultWidth + ((playlistColumn.__newWidth - playlistColumn.__oldRootWidth / playlistColumn.__widthFactor) * root.width / playlistColumn.__oldRootWidth)
+    readonly property real playlistMinWidth: VLCStyle.dp(225)
+    readonly property real playlistMaxWidth: root.width / 2
+
     function loadView() {
         var found = stackView.loadView(root.pageModel, root.view, root.viewProperties)
 
         stackView.currentItem.navigationParent = medialibId
         stackView.currentItem.navigationUpItem = sourcesBanner
-        stackView.currentItem.navigationRightItem = playlist
+        stackView.currentItem.navigationRightItem = playlistColumn
         stackView.currentItem.navigationDownItem = Qt.binding(function() {
             return miniPlayer.expanded ? miniPlayer : medialibId
         })
@@ -80,7 +91,7 @@ Widgets.NavigableFocusScope {
         }
         //unhandled keys are forwarded as hotkeys
         if (!event.accepted)
-            rootWindow.sendHotkey(event.key, event.modifiers);
+            mainInterface.sendHotkey(event.key, event.modifiers);
     }
 
     readonly property var pageModel: [
@@ -145,7 +156,7 @@ Widgets.NavigableFocusScope {
                 /* Source selection*/
                 Main.BannerSources {
                     id: sourcesBanner
-
+                    z: 2
                     Layout.preferredHeight: height
                     Layout.minimumHeight: height
                     Layout.maximumHeight: height
@@ -175,6 +186,7 @@ Widgets.NavigableFocusScope {
                 Item {
                     Layout.fillWidth: true
                     Layout.fillHeight: true
+                    z: 0
 
                     Widgets.StackViewExt {
                         id: stackView
@@ -185,8 +197,8 @@ Widgets.NavigableFocusScope {
                             top: parent.top
                             left: parent.left
                             bottom: parent.bottom
-                            right: playlist.visible ? playlist.left : parent.right
-                            rightMargin: (rootWindow.playlistDocked && rootWindow.playlistVisible)
+                            right: playlistColumn.visible ? playlistColumn.left : playlistColumn.right
+                            rightMargin: (mainInterface.playlistDocked && mainInterface.playlistVisible)
                                          ? 0
                                          : VLCStyle.applicationHorizontalMargin
                             leftMargin: VLCStyle.applicationHorizontalMargin
@@ -204,44 +216,187 @@ Widgets.NavigableFocusScope {
                         }
                     }
 
-
-                    PL.PlaylistListView {
-                        id: playlist
-                        focus: true
-                        width: root.width/4
-                        visible: rootWindow.playlistDocked && rootWindow.playlistVisible
+                    Widgets.NavigableFocusScope {
+                        id: playlistColumn
                         anchors {
                             top: parent.top
                             right: parent.right
                             bottom: parent.bottom
                         }
+                        width: root.width / __widthFactor
+                        visible: false
+                        focus: false
 
-                        rightPadding: VLCStyle.applicationHorizontalMargin
+                        property bool expanded: mainInterface.playlistDocked && mainInterface.playlistVisible
+                        property double __widthFactor : mainInterface.playlistWidthFactor ? mainInterface.playlistWidthFactor : 4.0
+                        property int __newWidth : root.width / __widthFactor
+                        property int __oldRootWidth : root.width
 
-                        navigationParent: medialibId
-                        navigationLeftItem: stackView
-                        navigationUpItem: sourcesBanner
-                        navigationDownItem: miniPlayer.expanded ? miniPlayer : undefined
-                        navigationCancel: function() {
-                            rootWindow.playlistVisible = false
-                            stackView.forceActiveFocus()
+                        onExpandedChanged: {
+                            if (expanded) {
+                                animateExpand.start()
+                                playlistColumn.forceActiveFocus()
+                            }
+                            else {
+                                animateRetract.start()
+                                stackView.forceActiveFocus()
+                            }
                         }
 
-                        Rectangle {
-                            anchors {
-                                top: parent.top
-                                left: parent.left
-                                bottom: parent.bottom
+                        PropertyAnimation {
+                            id: animateExpand;
+                            easing.type: Easing.InSine
+                            target: playlistColumn;
+                            properties: "width"
+                            duration: 150
+                            from: 0
+                            to: playlistBindingWidth
+                            onStarted: {
+                                playlistColumn.visible = true
                             }
-                            width: VLCStyle.margin_xxsmall
-                            color: VLCStyle.colors.banner
+
+                            onStopped: {
+                                playlistColumn.width = Qt.binding(function() {
+                                    if (playlistBindingWidth < playlistMinWidth)
+                                        return playlistMinWidth
+                                    else if (playlistBindingWidth > playlistMaxWidth)
+                                        return playlistMaxWidth
+                                    else
+                                        return playlistBindingWidth
+                                })
+                            }
+                        }
+
+                        PropertyAnimation {
+                            id: animateRetract;
+                            easing.type: Easing.OutSine
+                            target: playlistColumn;
+                            properties: "width"
+                            duration: 150
+                            to: 0
+                            onStopped: {
+                                playlistColumn.visible = false
+                            }
+                        }
+
+                        ColumnLayout {
+                            anchors.fill: parent
+                            spacing: 0
+
+                            Rectangle
+                            {
+                                id: topGlow
+                                Layout.fillWidth: true
+                                height: VLCStyle.margin_xxsmall
+                                visible: playlist.visible
+                                z: 1
+                                color: VLCStyle.colors.banner
+
+                                RectangularGlow {
+                                    anchors.fill: parent
+                                    glowRadius: VLCStyle.dp(8)
+                                    color: VLCStyle.colors.glowColor
+                                }
+                            }
+
+                            PL.PlaylistListView {
+                                id: playlist
+                                Layout.fillWidth: true
+                                Layout.fillHeight: true
+                                z: 0
+                                focus: true
+
+                                rightPadding: VLCStyle.applicationHorizontalMargin
+
+                                navigationParent: medialibId
+                                navigationLeftItem: stackView
+                                navigationUpItem: sourcesBanner
+                                navigationDownItem: miniPlayer.expanded ? miniPlayer : undefined
+                                navigationCancel: function() {
+                                    mainInterface.playlistVisible = false
+                                    stackView.forceActiveFocus()
+                                }
+
+                                Item
+                                {
+                                    anchors {
+                                        top: parent.top
+                                        left: parent.left
+                                        bottom: parent.bottom
+                                    }
+                                    width: VLCStyle.margin_xxsmall
+
+                                    RectangularGlow {
+                                        anchors.fill: parent
+
+                                        glowRadius: VLCStyle.dp(8)
+                                        color: VLCStyle.colors.glowColor
+                                    }
+
+                                    MouseArea {
+                                        id: dragArea
+                                        anchors {
+                                            top: parent.top
+                                            bottom: parent.bottom
+                                            horizontalCenter: parent.horizontalCenter
+                                        }
+                                        width: VLCStyle.dp(8)
+                                        property var _initialPos : playlistColumn.x
+                                        drag { target: parent; axis: Drag.XAxis }
+                                        onPositionChanged: {
+                                            if(drag.active){
+                                                var delta = mouseX - _initialPos
+                                                var newWidth = playlistColumn.width - delta
+                                                if (newWidth < playlistMaxWidth && newWidth > playlistMinWidth)
+                                                    playlistColumn.width -= delta
+                                            }
+                                        }
+                                        onPressed: {
+                                            // This is needed to break binding upon resizing, otherwise sizing glitches occur.
+                                            playlistColumn.width = Number(playlistColumn.width)
+
+                                            dragArea._initialPos = mouseX
+                                            playlistColumn.__oldRootWidth = root.width
+                                        }
+                                        onReleased: {
+                                            playlistColumn.__newWidth = playlistColumn.width
+                                            playlistColumn.width = Qt.binding(function() {
+                                                if (playlistBindingWidth < playlistMinWidth)
+                                                    return playlistMinWidth
+                                                else if (playlistBindingWidth > playlistMaxWidth)
+                                                    return playlistMaxWidth
+                                                else
+                                                    return playlistBindingWidth
+                                            })
+                                            mainInterface.setPlaylistWidthFactor(root.width / playlistColumn.width)
+                                        }
+                                        cursorShape: Qt.SizeHorCursor
+                                    }
+                                }
+                            }
+
+                            Rectangle
+                            {
+                                id: bottomGlow
+                                Layout.fillWidth: true
+                                height: VLCStyle.margin_xxsmall
+                                visible: playlist.visible
+                                z: 1
+                                color: VLCStyle.colors.banner
+
+                                RectangularGlow {
+                                    anchors.fill: parent
+                                    glowRadius: VLCStyle.dp(8)
+                                    color: VLCStyle.colors.glowColor
+                                }
+                            }
                         }
                     }
                 }
 
                 Player.MiniPlayer {
                     id: miniPlayer
-
+                    z: 2
                     navigationParent: medialibId
                     navigationUpItem: stackView
                     navigationCancelItem:sourcesBanner

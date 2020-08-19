@@ -270,9 +270,10 @@ function pick_stream( stream_map, js_url )
         return nil
     end
 
-    -- Either the "url" or the "cipher" parameter is present,
+    -- Either the "url" or the "signatureCipher" parameter is present,
     -- depending on whether the URL signature is scrambled.
-    local cipher = string.match( pick, '"cipher":"(.-)"' )
+    local cipher = string.match( pick, '"signatureCipher":"(.-)"' )
+        or string.match( pick, '"[a-zA-Z]*[Cc]ipher":"(.-)"' )
     if cipher then
         -- Scrambled signature: some assembly required
         local url = stream_url( cipher, js_url )
@@ -313,10 +314,13 @@ function parse()
         -- fmt is the format of the video
         -- (cf. http://en.wikipedia.org/wiki/YouTube#Quality_and_formats)
         fmt = get_url_param( vlc.path, "fmt" )
+        local lastline
         while true do
-            -- Try to find the video's title
-            line = vlc.readline()
+            local line = vlc.readline()
             if not line then break end
+            lastline = line
+
+            -- Try to find the video's title
             if string.match( line, "<meta property=\"og:title\"" ) then
                 _,_,name = string.find( line, "content=\"(.-)\"" )
                 name = vlc.strings.resolve_xml_special_chars( name )
@@ -324,12 +328,18 @@ function parse()
             end
 
             if not description then
-                description = string.match( line, "<p id=\"eow%-description\"[^>]*>(.-)</p>" )
+                -- FIXME: there is another version of this available,
+                -- without the double JSON string encoding, but we're
+                -- unlikely to access it due to #24957
+                description = string.match( line, '\\"shortDescription\\":\\"(.-[^\\])\\"')
                 if description then
-                    description = vlc.strings.resolve_xml_special_chars( description )
+                    -- FIXME: do this properly (see #24958)
+                    description = string.gsub( description, '\\(["\\/])', '%1' )
+                    description = string.gsub( description, '\\(["\\/])', '%1' )
+                    description = string.gsub( description, '\\n', '\n' )
+                    description = string.gsub( description, "\\u0026", "&" )
                 end
             end
-
 
             if string.match( line, "<meta property=\"og:image\"" ) then
                 _,_,arturl = string.find( line, "content=\"(.-)\"" )
@@ -338,6 +348,11 @@ function parse()
 
             if not artist then
                 artist = string.match(line, '\\"author\\":\\"(.-)\\"')
+                if artist then
+                    -- FIXME: do this properly (see #24958)
+                    artist = string.gsub( artist, "\\/", "/" )
+                    artist = string.gsub( artist, "\\u0026", "&" )
+                end
             end
 
             -- JSON parameters, also formerly known as "swfConfig",
@@ -355,7 +370,7 @@ function parse()
                     js_url = string.gsub( js_url, "^//", vlc.access.."://" )
                 end
 
-                -- Classic parameters
+                -- Classic parameters - out of use since early 2020
                 if not fmt then
                     fmt_list = string.match( line, "\"fmt_list\": *\"(.-)\"" )
                     if fmt_list then
@@ -367,7 +382,7 @@ function parse()
                 url_map = string.match( line, "\"url_encoded_fmt_stream_map\": *\"(.-)\"" )
                 if url_map then
                     vlc.msg.dbg( "Found classic parameters for youtube video stream, parsing..." )
-                    -- FIXME: do this properly
+                    -- FIXME: do this properly (see #24958)
                     url_map = string.gsub( url_map, "\\u0026", "&" )
                     path = pick_url( url_map, fmt, js_url )
                 end
@@ -377,8 +392,8 @@ function parse()
                     local stream_map = string.match( line, '\\"formats\\":%[(.-)%]' )
                     if stream_map then
                         vlc.msg.dbg( "Found new-style parameters for youtube video stream, parsing..." )
+                        -- FIXME: do this properly (see #24958)
                         stream_map = string.gsub( stream_map, '\\(["\\/])', '%1' )
-                        -- FIXME: do this properly
                         stream_map = string.gsub( stream_map, "\\u0026", "&" )
                         path = pick_stream( stream_map, js_url )
                     end
@@ -394,6 +409,10 @@ function parse()
                     end
                 end
             end
+        end
+
+        if not path and lastline and string.match( lastline, '<div id="player%-api">' ) then
+            vlc.msg.err( "YouTube web page truncated at very long line, please check https://trac.videolan.org/vlc/ticket/24957 for updates to this issue" )
         end
 
         if not path then
@@ -421,8 +440,12 @@ function parse()
 
     elseif string.match( vlc.path, "/get_video_info%?" ) then -- video info API
         local line = vlc.readline() -- data is on one line only
+        if not line then
+            vlc.msg.err( "YouTube API output missing: probably rejected as very long line, please check https://trac.videolan.org/vlc/ticket/24957 for updates to this issue" )
+            return { }
+        end
 
-        -- Classic parameters
+        -- Classic parameters - out of use since early 2020
         local fmt = get_url_param( vlc.path, "fmt" )
         if not fmt then
             local fmt_list = string.match( line, "&fmt_list=([^&]*)" )
@@ -445,7 +468,7 @@ function parse()
             if stream_map then
                 vlc.msg.dbg( "Found new-style parameters for youtube video stream, parsing..." )
                 stream_map = vlc.strings.decode_uri( stream_map )
-                -- FIXME: do this properly
+                -- FIXME: do this properly (see #24958)
                 stream_map = string.gsub( stream_map, "\\u0026", "&" )
                 path = pick_stream( stream_map )
             end
@@ -470,18 +493,32 @@ function parse()
         if title then
             title = string.gsub( title, "+", " " )
             title = vlc.strings.decode_uri( title )
+            -- FIXME: do this properly (see #24958)
+            title = string.gsub( title, "\\u0026", "&" )
+        end
+        -- FIXME: description gets truncated if it contains a double quote
+        local description = string.match( line, "%%22shortDescription%%22%%3A%%22(.-)%%22" )
+        if description then
+            description = string.gsub( description, "+", " " )
+            description = vlc.strings.decode_uri( description )
+            -- FIXME: do this properly (see #24958)
+            description = string.gsub( description, '\\(["\\/])', '%1' )
+            description = string.gsub( description, '\\n', '\n' )
+            description = string.gsub( description, "\\u0026", "&" )
         end
         local artist = string.match( line, "%%22author%%22%%3A%%22(.-)%%22" )
         if artist then
             artist = string.gsub( artist, "+", " " )
             artist = vlc.strings.decode_uri( artist )
+            -- FIXME: do this properly (see #24958)
+            artist = string.gsub( artist, "\\u0026", "&" )
         end
         local arturl = string.match( line, "%%22playerMicroformatRenderer%%22%%3A%%7B%%22thumbnail%%22%%3A%%7B%%22thumbnails%%22%%3A%%5B%%7B%%22url%%22%%3A%%22(.-)%%22" )
         if arturl then
             arturl = vlc.strings.decode_uri( arturl )
         end
 
-        return { { path = path, title = title, artist = artist, arturl = arturl } }
+        return { { path = path, title = title, description = description, artist = artist, arturl = arturl } }
 
     else -- Other supported URL formats
         local video_id = string.match( vlc.path, "/[^/]+/([^?]*)" )

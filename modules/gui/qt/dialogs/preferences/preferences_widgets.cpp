@@ -270,7 +270,7 @@ void FileConfigControl::fillGrid( QGridLayout *l, int line )
     textAndButton->setMargin( 0 );
     textAndButton->addWidget( text, 2 );
     textAndButton->addWidget( browse, 0 );
-    l->addLayout( textAndButton, line, LAST_COLUMN, 0 );
+    l->addLayout( textAndButton, line, LAST_COLUMN );
 }
 
 FileConfigControl::FileConfigControl( vlc_object_t *_p_this,
@@ -514,7 +514,7 @@ ModuleConfigControl::ModuleConfigControl( vlc_object_t *_p_this,
 void ModuleConfigControl::fillGrid( QGridLayout *l, int line )
 {
     l->addWidget( label, line, 0 );
-    l->addWidget( combo, line, LAST_COLUMN, 0 );
+    l->addWidget( combo, line, LAST_COLUMN );
 }
 
 ModuleConfigControl::ModuleConfigControl( vlc_object_t *_p_this,
@@ -933,7 +933,7 @@ BoolConfigControl::BoolConfigControl( vlc_object_t *_p_this,
 
 void BoolConfigControl::fillGrid( QGridLayout *l, int line )
 {
-    l->addWidget( checkbox, line, 0, 1, -1, 0 );
+    l->addWidget( checkbox, line, 0, 1, -1 );
 }
 
 BoolConfigControl::BoolConfigControl( vlc_object_t *_p_this,
@@ -1201,7 +1201,7 @@ void KeySelectorControl::finish()
 
     p_config = module_config_get (p_main, &confsize);
 
-    QMap<QString, QString> global_keys;
+    QMultiMap<QString, QString> global_keys;
     for (size_t i = 0; i < confsize; i++)
     {
         module_config_t *p_config_item = p_config + i;
@@ -1236,7 +1236,7 @@ void KeySelectorControl::finish()
          && !EMPTY_STR( p_config_item->psz_text )
          && !EMPTY_STR( p_config_item->value.psz ) )
         {
-            global_keys.insertMulti( qtr( p_config_item->psz_text ), qfu( p_config_item->value.psz ) );
+            global_keys.insert( qtr( p_config_item->psz_text ), qfu( p_config_item->value.psz ) );
         }
     }
 

@@ -40,6 +40,7 @@
 
 #include <vlc_text_style.h>                             /* text_style_t */
 #include <vlc_arrays.h>                                 /* vlc_dictionary_t */
+#include <vlc_vector.h>
 
 #include <ft2build.h>
 #include FT_FREETYPE_H
@@ -47,6 +48,8 @@
 #include FT_STROKER_H
 
 /* Consistency between Freetype versions and platforms */
+#define MAKE_VERSION(a,b,c)     (a*0x100 | b * 0x10 | c)
+#define FREETYPE_VERSION        MAKE_VERSION(FREETYPE_MAJOR, FREETYPE_MINOR, FREETYPE_PATCH)
 #define FT_FLOOR(X)     ((X & -64) >> 6)
 #define FT_CEIL(X)      (((X + 63) & -64) >> 6)
 #ifndef FT_MulFix
@@ -65,21 +68,38 @@ typedef uint32_t uni_char_t;
 # endif
 #endif
 
+#if FREETYPE_VERSION < MAKE_VERSION(2,1,5)
+  #define FT_GLYPH_BBOX_UNSCALED    ft_glyph_bbox_unscaled
+  #define FT_GLYPH_BBOX_SUBPIXELS   ft_glyph_bbox_subpixels
+  #define FT_GLYPH_BBOX_GRIDFIT     ft_glyph_bbox_gridfit
+  #define FT_GLYPH_BBOX_TRUNCATE    ft_glyph_bbox_truncate
+  #define FT_GLYPH_BBOX_PIXELS      ft_glyph_bbox_pixels
+  #define FT_ENCODING_UNICODE       ft_encoding_unicode
+#endif
+
+#include "ftcache.h"
+
+typedef struct vlc_font_select_t vlc_font_select_t;
+
 /*****************************************************************************
  * filter_sys_t: freetype local data
  *****************************************************************************
  * This structure is part of the video output thread descriptor.
  * It describes the freetype specific properties of an output thread.
  *****************************************************************************/
+typedef struct VLC_VECTOR(char *) fontfamilies_t;
 typedef struct vlc_family_t vlc_family_t;
 typedef struct
 {
     FT_Library     p_library;       /* handle to library     */
-    FT_Face        p_face;          /* handle to face object */
+    vlc_face_id_t *p_faceid;        /* handle to face object */
     FT_Stroker     p_stroker;       /* handle to path stroker object */
 
     text_style_t  *p_default_style;
     text_style_t  *p_forced_style;  /* Renderer overridings */
+
+    char *psz_fontfile;
+    char *psz_monofontfile;
 
     /* More styles... */
     float          f_shadow_vector_x;
@@ -89,57 +109,14 @@ typedef struct
     input_attachment_t **pp_font_attachments;
     int                  i_font_attachments;
 
-    /**
-     * This is the master family list. It owns the lists of vlc_font_t's
-     * and should be freed using FreeFamiliesAndFonts()
-     */
-    vlc_family_t      *p_families;
-
-    /**
-     * This maps a family name to a vlc_family_t within the master list
-     */
-    vlc_dictionary_t  family_map;
-
-    /**
-     * This maps a family name to a fallback list of vlc_family_t's.
-     * Fallback lists only reference the lists of vlc_font_t's within the
-     * master list, so they should be freed using FreeFamilies()
-     */
-    vlc_dictionary_t  fallback_map;
-
-    /** Font face cache */
-    vlc_dictionary_t  face_map;
-
-    int               i_fallback_counter;
-
     /* Current scaling of the text, default is 100 (%) */
     int               i_scale;
+    int               i_font_default_size;
+    int               i_outline_thickness;
 
-    /**
-     * Select a font, based on the family, the styles and the codepoint
-     */
-    char * (*pf_select) (filter_t *, const char* family,
-                         bool bold, bool italic,
-                         int *index, uni_char_t codepoint);
+    vlc_font_select_t *fs;
+    vlc_ftcache_t     *ftcache;
 
-    /**
-     * Get a pointer to the vlc_family_t in the master list that matches \p psz_family.
-     * Add this family to the list if it hasn't been added yet.
-     */
-    const vlc_family_t * (*pf_get_family) ( filter_t *p_filter, const char *psz_family );
-
-    /**
-     * Get the fallback list for \p psz_family from the system and cache
-     * it in \ref fallback_map.
-     * On Windows fallback lists are populated progressively as required
-     * using Uniscribe, so we need the codepoint here.
-     */
-    vlc_family_t * (*pf_get_fallbacks) ( filter_t *p_filter, const char *psz_family,
-                                         uni_char_t codepoint );
-
-#if defined( _WIN32 )
-    void *p_dw_sys;
-#endif
 } filter_sys_t;
 
 /**
@@ -149,8 +126,8 @@ typedef struct
  * \param p_style the requested style (fonts can be different for italic or bold) [IN]
  * \param codepoint the codepoint needed [IN]
  */
-FT_Face SelectAndLoadFace( filter_t *p_filter, const text_style_t *p_style,
-                           uni_char_t codepoint );
+vlc_face_id_t * SelectAndLoadFace( filter_t *p_filter, const text_style_t *p_style,
+                                   uni_char_t codepoint );
 
 static inline void BBoxInit( FT_BBox *p_box )
 {
@@ -168,5 +145,13 @@ static inline void BBoxEnlarge( FT_BBox *p_max, const FT_BBox *p )
     p_max->yMax = __MAX(p_max->yMax, p->yMax);
 }
 
+static inline int GetFontWidthForStyle( const text_style_t *p_style, int i_size )
+{
+    if( p_style->i_style_flags & STYLE_HALFWIDTH )
+        i_size /= 2;
+    else if( p_style->i_style_flags & STYLE_DOUBLEWIDTH )
+        i_size *= 2;
+    return i_size;
+}
 
 #endif

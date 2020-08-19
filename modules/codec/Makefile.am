@@ -41,7 +41,7 @@ libaraw_plugin_la_LIBADD = $(LIBM)
 codec_LTLIBRARIES += libaraw_plugin.la
 
 libfaad_plugin_la_SOURCES = codec/faad.c packetizer/mpeg4audio.h
-libfaad_plugin_la_CPPFLAGS = $(AM_CPPFLAGS) $(CPPFLAGS_faad)
+libfaad_plugin_la_CPPFLAGS = $(AM_CPPFLAGS) $(CFLAGS_faad)
 libfaad_plugin_la_LDFLAGS = $(AM_LDFLAGS) -rpath '$(codecdir)'
 libfaad_plugin_la_LIBADD = $(LIBS_faad) $(LIBM)
 EXTRA_LTLIBRARIES += libfaad_plugin.la
@@ -62,7 +62,7 @@ endif
 
 libaudiotoolboxmidi_plugin_la_SOURCES = codec/audiotoolbox_midi.c
 libaudiotoolboxmidi_plugin_la_LDFLAGS = $(AM_LDFLAGS) -rpath '$(codecdir)'
-libaudiotoolboxmidi_plugin_la_LDFLAGS += -Wl,-framework,CoreFoundation,-framework,AudioUnit,-framework,AudioToolbox
+libaudiotoolboxmidi_plugin_la_LDFLAGS += -Wl,-framework,CoreFoundation,-framework,AudioToolbox
 EXTRA_LTLIBRARIES += libaudiotoolboxmidi_plugin.la
 codec_LTLIBRARIES += $(LTLIBaudiotoolboxmidi)
 
@@ -337,14 +337,7 @@ liboggspots_plugin_la_LIBADD = $(OGGSPOTS_LIBS)
 EXTRA_LTLIBRARIES += liboggspots_plugin.la
 codec_LTLIBRARIES += $(LTLIBoggspots)
 
-libvideotoolbox_plugin_la_SOURCES = \
-	codec/vt_utils.c codec/vt_utils.h \
-	codec/videotoolbox.c codec/hxxx_helper.c codec/hxxx_helper.h \
-	packetizer/hxxx_nal.h packetizer/hxxx_nal.c \
-	packetizer/hxxx_sei.h packetizer/hxxx_sei.c \
-	packetizer/h264_slice.c packetizer/h264_slice.h \
-	packetizer/h264_nal.c packetizer/h264_nal.h \
-	packetizer/hevc_nal.c packetizer/hevc_nal.h
+libvideotoolbox_plugin_la_SOURCES = codec/videotoolbox.c
 libvideotoolbox_plugin_la_CFLAGS = $(AM_CFLAGS)
 if HAVE_IOS
 libvideotoolbox_plugin_la_CFLAGS += -miphoneos-version-min=9.0
@@ -352,7 +345,7 @@ endif
 if HAVE_TVOS
 libvideotoolbox_plugin_la_CFLAGS += -mtvos-version-min=10.2
 endif
-libvideotoolbox_plugin_la_LIBADD = libchroma_copy.la
+libvideotoolbox_plugin_la_LIBADD = libchroma_copy.la libvlc_hxxxhelper.la libvlc_vtutils.la
 libvideotoolbox_plugin_la_LDFLAGS = $(AM_LDFLAGS) -rpath '$(codecdir)' -Wl,-framework,CoreFoundation -Wl,-framework,VideoToolbox -Wl,-framework,CoreMedia -Wl,-framework,CoreVideo
 EXTRA_LTLIBRARIES += libvideotoolbox_plugin.la
 codec_LTLIBRARIES += $(LTLIBvideotoolbox)
@@ -418,10 +411,12 @@ libdxva2_plugin_la_SOURCES = \
 	codec/avcodec/va_surface.c codec/avcodec/va_surface.h \
 	packetizer/h264_nal.c packetizer/h264_nal.h \
 	packetizer/hevc_nal.c packetizer/hevc_nal.h \
-	codec/avcodec/dxva_blacklist.c
+	codec/avcodec/dxva_blocklist.c
 libdxva2_plugin_la_LIBADD = libd3d9_common.la $(LIBCOM) -lshlwapi -luuid
+if !HAVE_WINSTORE
 if HAVE_AVCODEC_DXVA2
 codec_LTLIBRARIES += libdxva2_plugin.la
+endif
 endif
 
 libd3d11_common_la_SOURCES = video_chroma/d3d11_fmt.c video_chroma/d3d11_fmt.h \
@@ -436,7 +431,7 @@ libd3d11va_plugin_la_SOURCES = \
         codec/avcodec/va_surface.c codec/avcodec/va_surface.h \
 	packetizer/h264_nal.c packetizer/h264_nal.h \
 	packetizer/hevc_nal.c packetizer/hevc_nal.h \
-	codec/avcodec/dxva_blacklist.c
+	codec/avcodec/dxva_blocklist.c
 libd3d11va_plugin_la_LIBADD = libd3d11_common.la $(LIBCOM) -luuid
 if HAVE_WINSTORE
 libd3d11va_plugin_la_LIBADD += -ld3d11
@@ -473,12 +468,8 @@ libmediacodec_plugin_la_CPPFLAGS = $(AM_CPPFLAGS) -I$(srcdir)/codec/omxil
 libmediacodec_plugin_la_SOURCES = codec/omxil/mediacodec.c codec/omxil/mediacodec.h \
 	codec/omxil/mediacodec_jni.c codec/omxil/mediacodec_ndk.c codec/omxil/utils.c \
 	codec/omxil/omxil_utils.h codec/omxil/qcom.c codec/omxil/qcom.h \
-	video_output/android/utils.c video_output/android/utils.h \
-	codec/hxxx_helper.c codec/hxxx_helper.h \
-	packetizer/hxxx_nal.h packetizer/hxxx_nal.c \
-	packetizer/h264_nal.c packetizer/h264_nal.h \
-	packetizer/hevc_nal.c packetizer/hevc_nal.h
-libmediacodec_plugin_la_LIBADD = libchroma_copy.la
+	video_output/android/utils.c video_output/android/utils.h
+libmediacodec_plugin_la_LIBADD = libchroma_copy.la libvlc_hxxxhelper.la
 codec_LTLIBRARIES += $(LTLIBomxil)
 EXTRA_LTLIBRARIES += libomxil_plugin.la
 if HAVE_ANDROID
@@ -572,12 +563,6 @@ codec_LTLIBRARIES += $(LTLIBdav1d)
 
 ### Hardware encoders ###
 
-libcrystalhd_plugin_la_SOURCES = codec/crystalhd.c packetizer/h264_nal.c packetizer/h264_nal.h
-libcrystalhd_plugin_la_LDFLAGS = $(AM_LDFLAGS) -rpath '$(codecdir)'
-libcrystalhd_plugin_la_LIBADD = $(LIBS_crystalhd)
-EXTRA_LTLIBRARIES += libcrystalhd_plugin.la
-codec_LTLIBRARIES += $(LTLIBcrystalhd)
-
 libqsv_plugin_la_SOURCES = codec/qsv.c codec/vlc_fifo_helper.h demux/mpeg/timestamps.h
 libqsv_plugin_la_CFLAGS = $(AM_CFLAGS) $(MFX_CFLAGS)
 libqsv_plugin_la_LDFLAGS = $(AM_LDFLAGS) -rpath '$(codecdir)'
@@ -593,7 +578,9 @@ libqsv_plugin_la_CPPFLAGS = $(AM_CPPFLAGS)
 libdmo_plugin_la_LIBADD = $(LIBM)
 if HAVE_WIN32
 libdmo_plugin_la_LIBADD += $(LIBCOM) -luuid
+if !HAVE_WINSTORE
 codec_LTLIBRARIES += libdmo_plugin.la
+endif
 endif
 
 libmft_plugin_la_SOURCES = codec/mft.c packetizer/h264_nal.c packetizer/h264_nal.h
@@ -614,3 +601,23 @@ libgstdecode_plugin_la_LIBADD = $(GST_VIDEO_LIBS) $(GST_APP_LIBS)
 if HAVE_GST_DECODE
 codec_LTLIBRARIES += libgstdecode_plugin.la
 endif
+
+libvlc_hxxxhelper_la_SOURCES = \
+	codec/hxxx_helper.c codec/hxxx_helper.h \
+	packetizer/hxxx_nal.h packetizer/hxxx_nal.c \
+	packetizer/hxxx_sei.h packetizer/hxxx_sei.c \
+	packetizer/h264_slice.c packetizer/h264_slice.h \
+	packetizer/h264_nal.c packetizer/h264_nal.h \
+	packetizer/hevc_nal.c packetizer/hevc_nal.h
+libvlc_hxxxhelper_la_CPPFLAGS = -Dneedsomethinghere
+libvlc_hxxxhelper_la_LDFLAGS = -static
+noinst_LTLIBRARIES += libvlc_hxxxhelper.la
+
+libhxxxhelper_testdec_plugin_la_SOURCES = codec/hxxx_helper_testdec.c
+libhxxxhelper_testdec_plugin_la_LDFLAGS = $(AM_LDFLAGS) -rpath '$(codecdir)'
+libhxxxhelper_testdec_plugin_la_LIBADD = libvlc_hxxxhelper.la
+noinst_LTLIBRARIES += libhxxxhelper_testdec_plugin.la
+
+libvlc_vtutils_la_SOURCES = codec/vt_utils.c codec/vt_utils.h
+libvlc_vtutils_la_LDFLAGS = -static -no-undefined
+EXTRA_LTLIBRARIES += libvlc_vtutils.la

@@ -112,7 +112,6 @@ struct es_out_id_t
 
     /* */
     bool b_scrambled;
-    bool b_forced; /* if true, bypass variables when selecting this track */
 
     /* Channel in the track type */
     int         i_channel;
@@ -345,7 +344,7 @@ decoder_on_thumbnail_ready(vlc_input_decoder_t *decoder, picture_t *pic, void *u
 
 static void
 decoder_on_new_video_stats(vlc_input_decoder_t *decoder, unsigned decoded, unsigned lost,
-                           unsigned displayed, void *userdata)
+                           unsigned displayed, unsigned late, void *userdata)
 {
     (void) decoder;
 
@@ -365,6 +364,8 @@ decoder_on_new_video_stats(vlc_input_decoder_t *decoder, unsigned decoded, unsig
     atomic_fetch_add_explicit(&stats->lost_pictures, lost,
                               memory_order_relaxed);
     atomic_fetch_add_explicit(&stats->displayed_pictures, displayed,
+                              memory_order_relaxed);
+    atomic_fetch_add_explicit(&stats->late_pictures, late,
                               memory_order_relaxed);
 }
 
@@ -1251,7 +1252,8 @@ static bool EsOutIsProgramVisible( es_out_t *out, input_source_t *source, int i_
 {
     es_out_sys_t *p_sys = container_of(out, es_out_sys_t, out);
     return p_sys->i_group_id == 0
-        || (p_sys->i_group_id == i_group && p_sys->p_pgrm->source == source);
+        || (p_sys->i_group_id == i_group &&
+            p_sys->p_pgrm && p_sys->p_pgrm->source == source);
 }
 
 /* EsOutProgramSelect:
@@ -2048,7 +2050,6 @@ static es_out_id_t *EsOutAddLocked( es_out_t *out, input_source_t *source,
     es_format_Init( &es->fmt_out, UNKNOWN_ES, 0 );
 
     es->b_scrambled = false;
-    es->b_forced = false;
     es->b_terminated = false;
 
     switch( es->fmt.i_cat )
@@ -2270,7 +2271,7 @@ static void EsOutSelectEs( es_out_t *out, es_out_id_t *es, bool b_force )
         const bool b_sout = input_priv(p_input)->p_sout != NULL;
         /* If b_forced, the ES is specifically requested by the user, so bypass
          * the following vars check. */
-        if( !es->b_forced )
+        if( !b_force )
         {
             if( es->fmt.i_cat == VIDEO_ES || es->fmt.i_cat == SPU_ES )
             {
@@ -2321,7 +2322,7 @@ static void EsOutSelectEs( es_out_t *out, es_out_id_t *es, bool b_force )
         if( vbi_page >= 0 )
         {
             input_SendEventVbiPage( p_input, vbi_page );
-            input_SendEventVbiTransparency( p_input, vbi_opaque );
+            input_SendEventVbiTransparency( p_input, !vbi_opaque );
         }
     }
 }
@@ -2400,6 +2401,57 @@ static void EsOutUnselectEs( es_out_t *out, es_out_id_t *es, bool b_update )
     EsOutSendEsEvent(out, es, VLC_INPUT_ES_UNSELECTED, false);
 }
 
+static bool EsOutSelectMatchPrioritized( const es_out_es_props_t *p_esprops,
+                                         const es_out_id_t *es )
+{
+    /* Otherwise, fallback by priority */
+    if( p_esprops->p_main_es != NULL )
+    {
+        return ( es->fmt.i_priority > p_esprops->p_main_es->fmt.i_priority );
+    }
+    else
+    {
+        return ( es->fmt.i_priority > ES_PRIORITY_NOT_DEFAULTABLE );
+    }
+}
+
+static bool EsOutSelectHasExplicitParams( const es_out_es_props_t *p_esprops )
+{
+    return p_esprops->str_ids || p_esprops->i_channel >= 0;
+}
+
+static bool EsOutSelectMatchExplicitParams( const es_out_es_props_t *p_esprops,
+                                            const es_out_id_t *es )
+{
+    /* user designated by ID ES have higher prio than everything */
+    if( p_esprops->str_ids )
+    {
+        char *saveptr, *str_ids = strdup( p_esprops->str_ids );
+        if( str_ids )
+        {
+            for( const char *str_id = strtok_r( str_ids, ",", &saveptr );
+                 str_id != NULL ;
+                 str_id = strtok_r( NULL, ",", &saveptr ) )
+            {
+                if( strcmp( str_id, es->id.str_id ) == 0 )
+                {
+                    free( str_ids );
+                    return true;
+                }
+            }
+        }
+        free( str_ids );
+    }
+
+    /* then channel index */
+    if( p_esprops->i_channel >= 0 )
+    {
+        return ( es->i_channel == p_esprops->i_channel );
+    }
+
+    return false;
+}
+
 /**
  * Select an ES given the current mode
  * XXX: you need to take a the lock before (stream.stream_lock)
@@ -2413,10 +2465,7 @@ static void EsOutSelect( es_out_t *out, es_out_id_t *es, bool b_force )
 {
     es_out_sys_t *p_sys = container_of(out, es_out_sys_t, out);
     es_out_es_props_t *p_esprops = GetPropsByCat( p_sys, es->fmt.i_cat );
-
-    if( !p_esprops || !p_sys->b_active ||
-        ( !b_force && es->fmt.i_priority < ES_PRIORITY_SELECTABLE_MIN ) ||
-        !es->p_pgrm )
+    if( !p_esprops || !p_sys->b_active || !es->p_pgrm )
     {
         return;
     }
@@ -2457,7 +2506,7 @@ static void EsOutSelect( es_out_t *out, es_out_id_t *es, bool b_force )
                   prgm != NULL;
                   prgm = strtok_r( NULL, ",", &buf ) )
             {
-                if( atoi( prgm ) == es->p_pgrm->i_id || b_force )
+                if( atoi( prgm ) == es->p_pgrm->i_id )
                 {
                     if( !EsIsSelected( es ) )
                         EsOutSelectEs( out, es, b_force );
@@ -2471,89 +2520,61 @@ static void EsOutSelect( es_out_t *out, es_out_id_t *es, bool b_force )
     {
         const es_out_id_t *wanted_es = NULL;
 
-        if( es->p_pgrm != p_sys->p_pgrm || !p_esprops )
+        if( es->p_pgrm != p_sys->p_pgrm )
             return;
 
-        /* user designated by ID ES have higher prio than everything */
-        if ( p_esprops->str_ids )
+        if( EsOutSelectHasExplicitParams( p_esprops ) )
         {
-            char *saveptr, *str_ids = strdup( p_esprops->str_ids );
-            if( str_ids )
-            {
-                for( const char *str_id = strtok_r( str_ids, ",", &saveptr );
-                     str_id != NULL && wanted_es != es;
-                     str_id = strtok_r( NULL, ",", &saveptr ) )
-                {
-                    if( strcmp( str_id, es->id.str_id ) == 0 )
-                        wanted_es = es;
-                }
-            }
-            free( str_ids );
-        }
-        /* then per pos */
-        else if( p_esprops->i_channel >= 0 )
-        {
-            if( p_esprops->i_channel == es->i_channel )
-                wanted_es = es;
+            if( !EsOutSelectMatchExplicitParams( p_esprops, es ) )
+                return;
+            wanted_es = es;
         }
         else if( p_esprops->ppsz_language )
         {
             /* If not deactivated */
             const int i_stop_idx = LanguageArrayIndex( p_esprops->ppsz_language, "none" );
+            const int current_es_idx = ( p_esprops->p_main_es == NULL ) ? -1 :
+                                    LanguageArrayIndex( p_esprops->ppsz_language,
+                                                        p_esprops->p_main_es->psz_language_code );
+            const int es_idx = LanguageArrayIndex( p_esprops->ppsz_language,
+                                                   es->psz_language_code );
+            if( es_idx >= 0 && (i_stop_idx < 0 || i_stop_idx > es_idx) )
             {
-                int current_es_idx = ( p_esprops->p_main_es == NULL ) ? -1 :
-                        LanguageArrayIndex( p_esprops->ppsz_language,
-                                            p_esprops->p_main_es->psz_language_code );
-                int es_idx = LanguageArrayIndex( p_esprops->ppsz_language,
-                                                 es->psz_language_code );
-                if( es_idx >= 0 && (i_stop_idx < 0 || i_stop_idx > es_idx) )
+                /* Only select the language if it's in the list */
+                if( current_es_idx < 0 || /* current es was not selected by lang prefs */
+                    es_idx < current_es_idx || /* current es has lower lang prio */
+                    ( es_idx == current_es_idx && /* lang is same, but es has higher prio */
+                      p_esprops->p_main_es->fmt.i_priority < es->fmt.i_priority ) )
                 {
-                    /* Only select the language if it's in the list */
-                    if( p_esprops->p_main_es == NULL ||
-                        current_es_idx < 0 || /* current es was not selected by lang prefs */
-                        es_idx < current_es_idx || /* current es has lower lang prio */
-                        (  es_idx == current_es_idx && /* lang is same, but es has higher prio */
-                           p_esprops->p_main_es->fmt.i_priority < es->fmt.i_priority ) )
-                    {
-                        wanted_es = es;
-                    }
-                }
-                /* We did not find a language matching our prefs */
-                else if( i_stop_idx < 0 ) /* If not fallback disabled by 'none' */
-                {
-                    /* Select if asked by demuxer */
-                    if( current_es_idx < 0 ) /* No es is currently selected by lang pref */
-                    {
-                        /* If demux has specified a track */
-                        if( p_esprops->i_demux_id >= 0 && es->fmt.i_id == p_esprops->i_demux_id )
-                        {
-                            wanted_es = es;
-                        }
-                        /* Otherwise, fallback by priority */
-                        else if( p_esprops->p_main_es == NULL ||
-                                 es->fmt.i_priority > p_esprops->p_main_es->fmt.i_priority )
-                        {
-                            if( b_auto_selected )
-                                wanted_es = es;
-                        }
-                    }
+                    wanted_es = es;
                 }
             }
 
+            if( wanted_es || /* We did find a language matching our prefs */
+                i_stop_idx >= 0 || /* If fallback disabled by 'none' */
+                current_es_idx >= 0 ) /* Is currently selected by lang pref */
+            {
+                b_auto_selected = false; /* do not perform other selection rules */
+            }
         }
-        /* If there is no user preference, select the default subtitle
-         * or adapt by ES priority */
-        else if( p_esprops->i_demux_id >= 0 && es->fmt.i_id == p_esprops->i_demux_id )
+
+        /* If demux has specified a default active track */
+        if( wanted_es == NULL &&
+            p_esprops->i_demux_id >= 0 &&
+            p_esprops->i_demux_id == es->fmt.i_id )
         {
             wanted_es = es;
         }
-        else if( p_esprops->p_main_es == NULL ||
-                 es->fmt.i_priority > p_esprops->p_main_es->fmt.i_priority )
+
+        /* If there is no user preference, select the default track
+         * or adapt by ES priority */
+        if( b_auto_selected && wanted_es == NULL &&
+            EsOutSelectMatchPrioritized( p_esprops, es ) )
         {
-            if( b_auto_selected )
-                wanted_es = es;
+            wanted_es = es;
         }
 
+        /* Do ES activation/deactivation */
         if( wanted_es == es && !EsIsSelected( es ) )
         {
             if( b_auto_unselect )
@@ -2761,9 +2782,10 @@ static int EsOutSend( es_out_t *out, es_out_id_t *es, block_t *p_block )
         bool pace = sout_instance_ControlsPace(input_priv(p_input)->p_sout);
 
         if( input_priv(p_input)->b_out_pace_control != pace )
+        {
             msg_Dbg( p_input, "switching to %ssync mode", pace ? "a" : "" );
-
-        input_priv(p_input)->b_out_pace_control = pace;
+            input_priv(p_input)->b_out_pace_control = pace;
+        }
     }
 #endif
 
@@ -2944,7 +2966,7 @@ static vlc_tick_t EsOutGetTracksDelay(es_out_t *out)
         tracks_delay = __MIN(tracks_delay, p_sys->i_audio_delay);
     if (has_spu)
         tracks_delay = __MIN(tracks_delay, p_sys->i_spu_delay);
-    return tracks_delay < 0 ? -tracks_delay : 0;
+    return -tracks_delay;
 }
 
 /**
@@ -3147,12 +3169,14 @@ static int EsOutVaControlLocked( es_out_t *out, input_source_t *source,
             return VLC_EGENERIC;
         }
 
+        input_thread_private_t *priv = input_priv(p_sys->p_input);
+
         /* TODO do not use vlc_tick_now() but proper stream acquisition date */
-        const bool b_low_delay = input_priv(p_sys->p_input)->b_low_delay;
+        const bool b_low_delay = priv->b_low_delay;
         bool b_extra_buffering_allowed = !b_low_delay && EsOutIsExtraBufferingAllowed( out );
         vlc_tick_t i_late = input_clock_Update(
                             p_pgrm->p_input_clock, VLC_OBJECT(p_sys->p_input),
-                            input_priv(p_sys->p_input)->b_can_pace_control || p_sys->b_buffering,
+                            priv->b_can_pace_control || p_sys->b_buffering,
                             b_extra_buffering_allowed,
                             i_pcr, vlc_tick_now() );
 
@@ -3168,8 +3192,8 @@ static int EsOutVaControlLocked( es_out_t *out, input_source_t *source,
         {
             /* Last pcr/clock update was late. We need to compensate by offsetting
                from the clock the rendering dates */
-            if( i_late > 0 && ( !input_priv(p_sys->p_input)->p_sout ||
-                            !input_priv(p_sys->p_input)->b_out_pace_control ) )
+            if( i_late > 0 && ( !priv->p_sout ||
+                            !priv->b_out_pace_control ) )
             {
                 /* input_clock_GetJitter returns compound delay:
                  * - initial pts delay (buffering/caching)
@@ -3190,15 +3214,13 @@ static int EsOutVaControlLocked( es_out_t *out, input_source_t *source,
                  *    and flush buffers (because all previous pts will now be late) */
 
                 /* Avoid dangerously high value */
-                const vlc_tick_t i_jitter_max =
-                        VLC_TICK_FROM_MS(var_InheritInteger( p_sys->p_input, "clock-jitter" ));
                 /* If the jitter increase is over our max or the total hits the maximum */
-                if( i_new_jitter > i_jitter_max ||
+                if( i_new_jitter > priv->i_jitter_max ||
                     i_clock_total_delay > INPUT_PTS_DELAY_MAX ||
                     /* jitter is always 0 due to median calculation first output
                        and low delay can't allow non reversible jitter increase
                        in branch below */
-                    (b_low_delay && i_late > i_jitter_max) )
+                    (b_low_delay && i_late > priv->i_jitter_max) )
                 {
                     msg_Err( p_sys->p_input,
                              "ES_OUT_SET_(GROUP_)PCR  is called %d ms late (jitter of %d ms ignored)",
@@ -3733,10 +3755,10 @@ static int EsOutVaPrivControlLocked( es_out_t *out, int query, va_list args )
         }
         else
         {
-            bool opaque = va_arg( args, int );
-            ret = vlc_input_decoder_SetVbiOpaque( es->p_dec, opaque );
+            bool transp = va_arg( args, int );
+            ret = vlc_input_decoder_SetVbiOpaque( es->p_dec, !transp );
             if( ret == VLC_SUCCESS )
-                input_SendEventVbiTransparency( p_sys->p_input, opaque );
+                input_SendEventVbiTransparency( p_sys->p_input, transp );
         }
         return ret;
     }

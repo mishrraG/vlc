@@ -110,6 +110,8 @@
         <file alias="noart_album.svg">pixmaps/noart_album.svg</file>
         <file alias="noart_artist.svg">pixmaps/noart_artist.svg</file>
         <file alias="noart_artist_small.svg">pixmaps/noart_artist_small.svg</file>
+        <file alias="play_button.svg">pixmaps/play_button.svg</file>
+        <file alias="back.svg">pixmaps/back.svg</file>
     </qresource>
     <qresource prefix="/prefsmenu">
         <file alias="cone_audio_64.png">pixmaps/prefs/spref_cone_Audio_64.png</file>
@@ -185,6 +187,7 @@
         <file alias="ToolTipArea.qml">widgets/qml/ToolTipArea.qml</file>
         <file alias="DNDLabel.qml">widgets/qml/DNDLabel.qml</file>
         <file alias="KeyNavigableTableView.qml">widgets/qml/KeyNavigableTableView.qml</file>
+        <file alias="TableColumns.qml">widgets/qml/TableColumns.qml</file>
         <file alias="NavigableFocusScope.qml">widgets/qml/NavigableFocusScope.qml</file>
         <file alias="FocusBackground.qml">widgets/qml/FocusBackground.qml</file>
         <file alias="ImageToolButton.qml">widgets/qml/ImageToolButton.qml</file>
@@ -209,6 +212,15 @@
         <file alias="NavigableRow.qml">widgets/qml/NavigableRow.qml</file>
         <file alias="TabButtonExt.qml">widgets/qml/TabButtonExt.qml</file>
         <file alias="ScrollingText.qml">widgets/qml/ScrollingText.qml</file>
+        <file alias="CaptionLabel.qml">widgets/qml/CaptionLabel.qml</file>
+        <file alias="IconLabel.qml">widgets/qml/IconLabel.qml</file>
+        <file alias="ListLabel.qml">widgets/qml/ListLabel.qml</file>
+        <file alias="SubtitleLabel.qml">widgets/qml/SubtitleLabel.qml</file>
+        <file alias="PlayCover.qml">widgets/qml/PlayCover.qml</file>
+        <file alias="MenuCaption.qml">widgets/qml/MenuCaption.qml</file>
+        <file alias="MediaCover.qml">widgets/qml/MediaCover.qml</file>
+        <file alias="MenuLabel.qml">widgets/qml/MenuLabel.qml</file>
+        <file alias="ListSubtitleLabel.qml">widgets/qml/ListSubtitleLabel.qml</file>
     </qresource>
     <qresource prefix="/util">
         <file alias="SelectableDelegateModel.qml">util/qml/SelectableDelegateModel.qml</file>
@@ -216,7 +228,7 @@
     </qresource>
     <qresource prefix="/network">
         <file alias="NetworkDisplay.qml">network/qml/NetworkDisplay.qml</file>
-        <file alias="NetworksSectionSelectableDM.qml">network/qml/NetworksSectionSelectableDM.qml</file>
+        <file alias="NetworkHomeDeviceListView.qml">network/qml/NetworkHomeDeviceListView.qml</file>
         <file alias="NetworkHomeDisplay.qml">network/qml/NetworkHomeDisplay.qml</file>
         <file alias="NetworkBrowseDisplay.qml">network/qml/NetworkBrowseDisplay.qml</file>
         <file alias="NetworkGridItem.qml">network/qml/NetworkGridItem.qml</file>
@@ -230,6 +242,8 @@
         <file alias="VideoDisplay.qml">medialibrary/qml/VideoDisplay.qml</file>
         <file alias="MusicAlbumsDisplay.qml">medialibrary/qml/MusicAlbumsDisplay.qml</file>
         <file alias="MusicAlbumsGridExpandDelegate.qml">medialibrary/qml/MusicAlbumsGridExpandDelegate.qml</file>
+        <file alias="MusicArtist.qml">medialibrary/qml/MusicArtist.qml</file>
+        <file alias="MusicArtistsAlbums.qml">medialibrary/qml/MusicArtistsAlbums.qml</file>
         <file alias="MusicArtistsDisplay.qml">medialibrary/qml/MusicArtistsDisplay.qml</file>
         <file alias="MusicGenresDisplay.qml">medialibrary/qml/MusicGenresDisplay.qml</file>
         <file alias="MusicTracksDisplay.qml">medialibrary/qml/MusicTracksDisplay.qml</file>
@@ -251,7 +265,6 @@
         <file alias="PLItem.qml">playlist/qml/PLItem.qml</file>
         <file alias="PlaylistListView.qml">playlist/qml/PlaylistListView.qml</file>
         <file alias="PlaylistMenu.qml">playlist/qml/PlaylistMenu.qml</file>
-        <file alias="PLItemFooter.qml">playlist/qml/PLItemFooter.qml</file>
         <file alias="PlaylistMainView.qml">playlist/qml/PlaylistMainView.qml</file>
         <file alias="PlaylistToolbar.qml">playlist/qml/PlaylistToolbar.qml</file>
     </qresource>

@@ -39,17 +39,9 @@
 
 #include "gl_util.h"
 #include "internal.h"
-#include "interop.h"
 #include "vout_helper.h"
 
 #define SPHERE_RADIUS 1.f
-
-static const GLfloat identity[] = {
-    1.0f, 0.0f, 0.0f, 0.0f,
-    0.0f, 1.0f, 0.0f, 0.0f,
-    0.0f, 0.0f, 1.0f, 0.0f,
-    0.0f, 0.0f, 0.0f, 1.0f
-};
 
 static void getZoomMatrix(float zoom, GLfloat matrix[static 16]) {
 
@@ -96,77 +88,14 @@ static void getViewpointMatrixes(struct vlc_gl_renderer *renderer,
     }
     else
     {
-        memcpy(renderer->var.ProjectionMatrix, identity, sizeof(identity));
-        memcpy(renderer->var.ZoomMatrix, identity, sizeof(identity));
-        memcpy(renderer->var.ViewMatrix, identity, sizeof(identity));
+        memcpy(renderer->var.ProjectionMatrix, MATRIX4_IDENTITY,
+                                               sizeof(MATRIX4_IDENTITY));
+        memcpy(renderer->var.ZoomMatrix, MATRIX4_IDENTITY,
+                                         sizeof(MATRIX4_IDENTITY));
+        memcpy(renderer->var.ViewMatrix, MATRIX4_IDENTITY,
+                                         sizeof(MATRIX4_IDENTITY));
     }
 
-}
-
-static void getOrientationTransformMatrix(video_orientation_t orientation,
-                                          GLfloat matrix[static 16])
-{
-    memcpy(matrix, identity, sizeof(identity));
-
-    const int k_cos_pi = -1;
-    const int k_cos_pi_2 = 0;
-    const int k_cos_n_pi_2 = 0;
-
-    const int k_sin_pi = 0;
-    const int k_sin_pi_2 = 1;
-    const int k_sin_n_pi_2 = -1;
-
-    switch (orientation) {
-
-        case ORIENT_ROTATED_90:
-            matrix[0 * 4 + 0] = k_cos_pi_2;
-            matrix[0 * 4 + 1] = -k_sin_pi_2;
-            matrix[1 * 4 + 0] = k_sin_pi_2;
-            matrix[1 * 4 + 1] = k_cos_pi_2;
-            matrix[3 * 4 + 1] = 1;
-            break;
-        case ORIENT_ROTATED_180:
-            matrix[0 * 4 + 0] = k_cos_pi;
-            matrix[0 * 4 + 1] = -k_sin_pi;
-            matrix[1 * 4 + 0] = k_sin_pi;
-            matrix[1 * 4 + 1] = k_cos_pi;
-            matrix[3 * 4 + 0] = 1;
-            matrix[3 * 4 + 1] = 1;
-            break;
-        case ORIENT_ROTATED_270:
-            matrix[0 * 4 + 0] = k_cos_n_pi_2;
-            matrix[0 * 4 + 1] = -k_sin_n_pi_2;
-            matrix[1 * 4 + 0] = k_sin_n_pi_2;
-            matrix[1 * 4 + 1] = k_cos_n_pi_2;
-            matrix[3 * 4 + 0] = 1;
-            break;
-        case ORIENT_HFLIPPED:
-            matrix[0 * 4 + 0] = -1;
-            matrix[3 * 4 + 0] = 1;
-            break;
-        case ORIENT_VFLIPPED:
-            matrix[1 * 4 + 1] = -1;
-            matrix[3 * 4 + 1] = 1;
-            break;
-        case ORIENT_TRANSPOSED:
-            matrix[0 * 4 + 0] = 0;
-            matrix[1 * 4 + 1] = 0;
-            matrix[2 * 4 + 2] = -1;
-            matrix[0 * 4 + 1] = 1;
-            matrix[1 * 4 + 0] = 1;
-            break;
-        case ORIENT_ANTI_TRANSPOSED:
-            matrix[0 * 4 + 0] = 0;
-            matrix[1 * 4 + 1] = 0;
-            matrix[2 * 4 + 2] = -1;
-            matrix[0 * 4 + 1] = -1;
-            matrix[1 * 4 + 0] = -1;
-            matrix[3 * 4 + 0] = 1;
-            matrix[3 * 4 + 1] = 1;
-            break;
-        default:
-            break;
-    }
 }
 
 static void
@@ -185,14 +114,10 @@ InitStereoMatrix(GLfloat matrix_out[static 3*3],
      * would be sufficient).
      */
 
+    memcpy(matrix_out, MATRIX3_IDENTITY, sizeof(MATRIX3_IDENTITY));
+
 #define COL(x) (x*3)
 #define ROW(x) (x)
-
-    /* Initialize to identity 3x3 */
-    memset(matrix_out, 0, 3 * 3 * sizeof(float));
-    matrix_out[COL(0) + ROW(0)] = 1;
-    matrix_out[COL(1) + ROW(1)] = 1;
-    matrix_out[COL(2) + ROW(2)] = 1;
 
     switch (multiview_mode)
     {
@@ -244,12 +169,23 @@ InitStereoMatrix(GLfloat matrix_out[static 3*3],
 #undef ROW
 }
 
+/* https://en.wikipedia.org/wiki/OpenGL_Shading_Language#Versions */
+#ifdef USE_OPENGL_ES2
+# define SHADER_VERSION "#version 100\n"
+  /* In OpenGL ES, the fragment language has no default precision qualifier for
+   * floating point types. */
+# define FRAGMENT_SHADER_PRECISION "precision highp float;\n"
+#else
+# define SHADER_VERSION "#version 120\n"
+# define FRAGMENT_SHADER_PRECISION
+#endif
+
 static char *
 BuildVertexShader(const struct vlc_gl_renderer *renderer)
 {
     /* Basic vertex shader */
     static const char *template =
-        "#version %u\n"
+        SHADER_VERSION
         "attribute vec2 PicCoordsIn;\n"
         "varying vec2 PicCoords;\n"
         "attribute vec3 VertexPosition;\n"
@@ -263,53 +199,43 @@ BuildVertexShader(const struct vlc_gl_renderer *renderer)
         "               * vec4(VertexPosition, 1.0);\n"
         "}";
 
-    char *code;
-    if (asprintf(&code, template, renderer->glsl_version) < 0)
+    char *code = strdup(template);
+    if (!code)
         return NULL;
 
-    if (renderer->b_dump_shaders)
+    if (renderer->dump_shaders)
         msg_Dbg(renderer->gl, "\n=== Vertex shader for fourcc: %4.4s ===\n%s\n",
-                (const char *) &renderer->interop->fmt.i_chroma, code);
+                (const char *) &renderer->sampler->fmt->i_chroma, code);
     return code;
 }
 
 static char *
 BuildFragmentShader(struct vlc_gl_renderer *renderer)
 {
-    struct vlc_gl_interop *interop = renderer->interop;
-    char *vlc_texture =
-        opengl_fragment_shader_init(renderer, interop->tex_target,
-                                    interop->sw_fmt.i_chroma,
-                                    interop->sw_fmt.space);
-    if (!vlc_texture)
-        return NULL;
+    struct vlc_gl_sampler *sampler = renderer->sampler;
 
     static const char *template =
-        "#version %u\n"
+        SHADER_VERSION
         "%s" /* extensions */
-        "%s" /* precision header */
+        FRAGMENT_SHADER_PRECISION
         "%s" /* vlc_texture definition */
         "varying vec2 PicCoords;\n"
         "void main() {\n"
         " gl_FragColor = vlc_texture(PicCoords);\n"
         "}\n";
 
-    /* TODO move extensions back to fragment_shaders.c */
-    const char *extensions = interop->tex_target == GL_TEXTURE_EXTERNAL_OES
-                           ? "#extension GL_OES_EGL_image_external : require\n"
-                           : "";
+    const char *extensions = sampler->shader.extensions
+                           ? sampler->shader.extensions : "";
 
     char *code;
-    int ret = asprintf(&code, template, renderer->glsl_version, extensions,
-                       renderer->glsl_precision_header, vlc_texture);
-    free(vlc_texture);
+    int ret = asprintf(&code, template, extensions, sampler->shader.body);
     if (ret < 0)
         return NULL;
 
-    if (renderer->b_dump_shaders)
+    if (renderer->dump_shaders)
         msg_Dbg(renderer->gl, "\n=== Fragment shader for fourcc: %4.4s, colorspace: %d ===\n%s\n",
-                              (const char *) &interop->sw_fmt.i_chroma,
-                              interop->sw_fmt.space, code);
+                              (const char *) &sampler->fmt->i_chroma,
+                              sampler->fmt->space, code);
 
     return code;
 }
@@ -317,7 +243,7 @@ BuildFragmentShader(struct vlc_gl_renderer *renderer)
 static int
 opengl_link_program(struct vlc_gl_renderer *renderer)
 {
-    struct vlc_gl_interop *interop = renderer->interop;
+    struct vlc_gl_sampler *sampler = renderer->sampler;
     const opengl_vtable_t *vt = renderer->vt;
 
     char *vertex_shader = BuildVertexShader(renderer);
@@ -331,11 +257,9 @@ opengl_link_program(struct vlc_gl_renderer *renderer)
         return VLC_EGENERIC;
     }
 
-    assert(interop->tex_target != 0 &&
-           interop->tex_count > 0 &&
-           interop->ops->update_textures != NULL &&
-           renderer->pf_fetch_locations != NULL &&
-           renderer->pf_prepare_shader != NULL);
+    assert(sampler->ops &&
+           sampler->ops->fetch_locations &&
+           sampler->ops->load);
 
     GLuint program_id =
         vlc_gl_BuildProgram(VLC_OBJECT(renderer->gl), vt,
@@ -357,8 +281,6 @@ opengl_link_program(struct vlc_gl_renderer *renderer)
 } while (0)
 #define GET_ULOC(x, str) GET_LOC(Uniform, renderer->uloc.x, str)
 #define GET_ALOC(x, str) GET_LOC(Attrib, renderer->aloc.x, str)
-    GET_ULOC(TransformMatrix, "TransformMatrix");
-    GET_ULOC(OrientationMatrix, "OrientationMatrix");
     GET_ULOC(StereoMatrix, "StereoMatrix");
     GET_ULOC(ProjectionMatrix, "ProjectionMatrix");
     GET_ULOC(ViewMatrix, "ViewMatrix");
@@ -366,27 +288,11 @@ opengl_link_program(struct vlc_gl_renderer *renderer)
 
     GET_ALOC(PicCoordsIn, "PicCoordsIn");
     GET_ALOC(VertexPosition, "VertexPosition");
-
-    GET_ULOC(TexCoordsMap[0], "TexCoordsMap0");
-    /* MultiTexCoord 1 and 2 can be optimized out if not used */
-    if (interop->tex_count > 1)
-        GET_ULOC(TexCoordsMap[1], "TexCoordsMap1");
-    else
-        renderer->uloc.TexCoordsMap[1] = -1;
-    if (interop->tex_count > 2)
-        GET_ULOC(TexCoordsMap[2], "TexCoordsMap2");
-    else
-        renderer->uloc.TexCoordsMap[2] = -1;
 #undef GET_LOC
 #undef GET_ULOC
 #undef GET_ALOC
-    int ret = renderer->pf_fetch_locations(renderer, program_id);
-    assert(ret == VLC_SUCCESS);
-    if (ret != VLC_SUCCESS)
-    {
-        msg_Err(renderer->gl, "Unable to get locations from tex_conv");
-        goto error;
-    }
+
+    vlc_gl_sampler_FetchLocations(sampler, program_id);
 
     renderer->program_id = program_id;
 
@@ -401,25 +307,14 @@ error:
 void
 vlc_gl_renderer_Delete(struct vlc_gl_renderer *renderer)
 {
-    struct vlc_gl_interop *interop = renderer->interop;
     const opengl_vtable_t *vt = renderer->vt;
 
     vt->DeleteBuffers(1, &renderer->vertex_buffer_object);
     vt->DeleteBuffers(1, &renderer->index_buffer_object);
     vt->DeleteBuffers(1, &renderer->texture_buffer_object);
 
-    if (!interop->handle_texs_gen)
-        vt->DeleteTextures(interop->tex_count, renderer->textures);
-
-    vlc_gl_interop_Delete(interop);
     if (renderer->program_id != 0)
         vt->DeleteProgram(renderer->program_id);
-
-#ifdef HAVE_LIBPLACEBO
-    FREENULL(renderer->uloc.pl_vars);
-    if (renderer->pl_ctx)
-        pl_context_destroy(&renderer->pl_ctx);
-#endif
 
     free(renderer);
 }
@@ -428,50 +323,21 @@ static int SetupCoords(struct vlc_gl_renderer *renderer);
 
 struct vlc_gl_renderer *
 vlc_gl_renderer_New(vlc_gl_t *gl, const struct vlc_gl_api *api,
-                    vlc_video_context *context, const video_format_t *fmt,
-                    bool b_dump_shaders)
+                    struct vlc_gl_sampler *sampler)
 {
     const opengl_vtable_t *vt = &api->vt;
+    const video_format_t *fmt = sampler->fmt;
 
     struct vlc_gl_renderer *renderer = calloc(1, sizeof(*renderer));
     if (!renderer)
         return NULL;
 
-    struct vlc_gl_interop *interop =
-        vlc_gl_interop_New(gl, api, context, fmt, false);
-    if (!interop)
-    {
-        free(renderer);
-        return NULL;
-    }
-
-    renderer->interop = interop;
+    renderer->sampler = sampler;
 
     renderer->gl = gl;
     renderer->api = api;
     renderer->vt = vt;
-    renderer->b_dump_shaders = b_dump_shaders;
-#if defined(USE_OPENGL_ES2)
-    renderer->glsl_version = 100;
-    renderer->glsl_precision_header = "precision highp float;\n";
-#else
-    renderer->glsl_version = 120;
-    renderer->glsl_precision_header = "";
-#endif
-
-#ifdef HAVE_LIBPLACEBO
-    // Create the main libplacebo context
-    renderer->pl_ctx = vlc_placebo_Create(VLC_OBJECT(gl));
-    if (renderer->pl_ctx) {
-#   if PL_API_VER >= 20
-        renderer->pl_sh = pl_shader_alloc(renderer->pl_ctx, NULL);
-#   elif PL_API_VER >= 6
-        renderer->pl_sh = pl_shader_alloc(renderer->pl_ctx, NULL, 0);
-#   else
-        renderer->pl_sh = pl_shader_alloc(renderer->pl_ctx, NULL, 0, 0);
-#   endif
-    }
-#endif
+    renderer->dump_shaders = var_InheritInteger(gl, "verbose") >= 4;
 
     int ret = opengl_link_program(renderer);
     if (ret != VLC_SUCCESS)
@@ -480,43 +346,9 @@ vlc_gl_renderer_New(vlc_gl_t *gl, const struct vlc_gl_api *api,
         return NULL;
     }
 
-    InitStereoMatrix(renderer->var.StereoMatrix, interop->fmt.multiview_mode);
+    InitStereoMatrix(renderer->var.StereoMatrix, fmt->multiview_mode);
 
-    getOrientationTransformMatrix(interop->fmt.orientation,
-                                  renderer->var.OrientationMatrix);
-    getViewpointMatrixes(renderer, interop->fmt.projection_mode);
-
-    /* Update the fmt to main program one */
-    renderer->fmt = interop->fmt;
-    /* The orientation is handled by the orientation matrix */
-    renderer->fmt.orientation = fmt->orientation;
-
-    /* Texture size */
-    for (unsigned j = 0; j < interop->tex_count; j++) {
-        const GLsizei w = renderer->fmt.i_visible_width  * interop->texs[j].w.num
-                        / interop->texs[j].w.den;
-        const GLsizei h = renderer->fmt.i_visible_height * interop->texs[j].h.num
-                        / interop->texs[j].h.den;
-        if (api->supports_npot) {
-            renderer->tex_width[j]  = w;
-            renderer->tex_height[j] = h;
-        } else {
-            renderer->tex_width[j]  = vlc_align_pot(w);
-            renderer->tex_height[j] = vlc_align_pot(h);
-        }
-    }
-
-    if (!interop->handle_texs_gen)
-    {
-        ret = vlc_gl_interop_GenerateTextures(interop, renderer->tex_width,
-                                              renderer->tex_height,
-                                              renderer->textures);
-        if (ret != VLC_SUCCESS)
-        {
-            vlc_gl_renderer_Delete(renderer);
-            return NULL;
-        }
-    }
+    getViewpointMatrixes(renderer, fmt->projection_mode);
 
     /* */
     vt->Disable(GL_BLEND);
@@ -524,7 +356,6 @@ vlc_gl_renderer_New(vlc_gl_t *gl, const struct vlc_gl_api *api,
     vt->DepthMask(GL_FALSE);
     vt->Enable(GL_CULL_FACE);
     vt->ClearColor(0.0f, 0.0f, 0.0f, 1.0f);
-    vt->Clear(GL_COLOR_BUFFER_BIT);
 
     vt->GenBuffers(1, &renderer->vertex_buffer_object);
     vt->GenBuffers(1, &renderer->index_buffer_object);
@@ -590,7 +421,8 @@ vlc_gl_renderer_SetViewpoint(struct vlc_gl_renderer *renderer,
         UpdateFOVy(renderer);
         UpdateZ(renderer);
     }
-    getViewpointMatrixes(renderer, renderer->fmt.projection_mode);
+    const video_format_t *fmt = renderer->sampler->fmt;
+    getViewpointMatrixes(renderer, fmt->projection_mode);
 
     return VLC_SUCCESS;
 }
@@ -605,7 +437,9 @@ vlc_gl_renderer_SetWindowAspectRatio(struct vlc_gl_renderer *renderer,
     renderer->f_sar = f_sar;
     UpdateFOVy(renderer);
     UpdateZ(renderer);
-    getViewpointMatrixes(renderer, renderer->fmt.projection_mode);
+
+    const video_format_t *fmt = renderer->sampler->fmt;
+    getViewpointMatrixes(renderer, fmt->projection_mode);
 }
 
 static int BuildSphere(GLfloat **vertexCoord, GLfloat **textureCoord, unsigned *nbVertices,
@@ -657,7 +491,8 @@ static int BuildSphere(GLfloat **vertexCoord, GLfloat **textureCoord, unsigned *
 
             unsigned off2 = (lat * (nbLonBands + 1) + lon) * 2;
             float u = (float)lon / nbLonBands;
-            float v = (float)lat / nbLatBands;
+            /* In OpenGL, the texture coordinates start at bottom left */
+            float v = 1.0f - (float)lat / nbLatBands;
             (*textureCoord)[off2] = u;
             (*textureCoord)[off2 + 1] = v;
         }
@@ -691,54 +526,45 @@ static int BuildCube(float padW, float padH,
     *nbVertices = 4 * 6;
     *nbIndices = 6 * 6;
 
+    *vertexCoord = NULL;
+    *textureCoord = NULL;
+    *indices = NULL;
+
     *vertexCoord = vlc_alloc(*nbVertices * 3, sizeof(GLfloat));
     if (*vertexCoord == NULL)
-        return VLC_ENOMEM;
+        goto error;
+
     *textureCoord = vlc_alloc(*nbVertices * 2, sizeof(GLfloat));
     if (*textureCoord == NULL)
-    {
-        free(*vertexCoord);
-        return VLC_ENOMEM;
-    }
+        goto error;
+
     *indices = vlc_alloc(*nbIndices, sizeof(GLushort));
     if (*indices == NULL)
-    {
-        free(*textureCoord);
-        free(*vertexCoord);
-        return VLC_ENOMEM;
-    }
+        goto error;
+
+#define CUBEFACE(swap, value) \
+    swap(value, -1.f,  1.f), \
+    swap(value, -1.f, -1.f), \
+    swap(value,  1.f,  1.f), \
+    swap(value,  1.f, -1.f)
+
+#define X_FACE(v, a, b) (v), (a), (b)
+#define Y_FACE(v, a, b) (a), (v), (b)
+#define Z_FACE(v, a, b) (a), (b), (v)
 
     static const GLfloat coord[] = {
-        -1.0,    1.0,    -1.0f, // front
-        -1.0,    -1.0,   -1.0f,
-        1.0,     1.0,    -1.0f,
-        1.0,     -1.0,   -1.0f,
-
-        -1.0,    1.0,    1.0f, // back
-        -1.0,    -1.0,   1.0f,
-        1.0,     1.0,    1.0f,
-        1.0,     -1.0,   1.0f,
-
-        -1.0,    1.0,    -1.0f, // left
-        -1.0,    -1.0,   -1.0f,
-        -1.0,     1.0,    1.0f,
-        -1.0,     -1.0,   1.0f,
-
-        1.0f,    1.0,    -1.0f, // right
-        1.0f,   -1.0,    -1.0f,
-        1.0f,   1.0,     1.0f,
-        1.0f,   -1.0,    1.0f,
-
-        -1.0,    -1.0,    1.0f, // bottom
-        -1.0,    -1.0,   -1.0f,
-        1.0,     -1.0,    1.0f,
-        1.0,     -1.0,   -1.0f,
-
-        -1.0,    1.0,    1.0f, // top
-        -1.0,    1.0,   -1.0f,
-        1.0,     1.0,    1.0f,
-        1.0,     1.0,   -1.0f,
+        CUBEFACE(X_FACE, -1.f), // FRONT
+        CUBEFACE(X_FACE, +1.f), // BACK
+        CUBEFACE(Z_FACE, +1.f), // LEFT
+        CUBEFACE(Z_FACE, -1.f), // RIGHT
+        CUBEFACE(Y_FACE, -1.f), // BOTTOM
+        CUBEFACE(Y_FACE, +1.f), // TOP
     };
+
+#undef X_FACE
+#undef Y_FACE
+#undef Z_FACE
+#undef CUBEFACE
 
     memcpy(*vertexCoord, coord, *nbVertices * 3 * sizeof(GLfloat));
 
@@ -746,35 +572,35 @@ static int BuildCube(float padW, float padH,
     float row[] = {0.f, 1.f/2, 1.0};
 
     const GLfloat tex[] = {
-        col[1] + padW, row[1] + padH, // front
-        col[1] + padW, row[2] - padH,
-        col[2] - padW, row[1] + padH,
-        col[2] - padW, row[2] - padH,
-
-        col[3] - padW, row[1] + padH, // back
-        col[3] - padW, row[2] - padH,
-        col[2] + padW, row[1] + padH,
-        col[2] + padW, row[2] - padH,
-
-        col[2] - padW, row[0] + padH, // left
-        col[2] - padW, row[1] - padH,
-        col[1] + padW, row[0] + padH,
-        col[1] + padW, row[1] - padH,
-
-        col[0] + padW, row[0] + padH, // right
-        col[0] + padW, row[1] - padH,
-        col[1] - padW, row[0] + padH,
+        col[1] + padW, row[0] - padH, // front
+        col[2] + padW, row[0] + padH,
         col[1] - padW, row[1] - padH,
+        col[2] - padW, row[1] + padH,
 
-        col[0] + padW, row[2] - padH, // bottom
+        col[3] - padW, row[0] - padH, // back
+        col[2] - padW, row[0] + padH,
+        col[3] + padW, row[1] - padH,
+        col[2] + padW, row[1] + padH,
+
+        col[2] - padW, row[2] - padH, // left
+        col[2] - padW, row[1] + padH,
+        col[1] + padW, row[2] - padH,
+        col[1] + padW, row[1] + padH,
+
+        col[0] + padW, row[2] - padH, // right
         col[0] + padW, row[1] + padH,
         col[1] - padW, row[2] - padH,
         col[1] - padW, row[1] + padH,
 
-        col[2] + padW, row[0] + padH, // top
-        col[2] + padW, row[1] - padH,
-        col[3] - padW, row[0] + padH,
-        col[3] - padW, row[1] - padH,
+        col[0] + padW, row[1] + padH, // bottom
+        col[1] + padW, row[1] - padH,
+        col[0] - padW, row[0] + padH,
+        col[1] - padW, row[0] - padH,
+
+        col[2] + padW, row[1] - padH, // top
+        col[3] + padW, row[1] + padH,
+        col[2] - padW, row[2] - padH,
+        col[3] - padW, row[2] + padH,
     };
 
     memcpy(*textureCoord, tex,
@@ -792,6 +618,11 @@ static int BuildCube(float padW, float padH,
     memcpy(*indices, ind, *nbIndices * sizeof(GLushort));
 
     return VLC_SUCCESS;
+
+error:
+    free(*vertexCoord);
+    free(*textureCoord);
+    return VLC_ENOMEM;
 }
 
 static int BuildRectangle(GLfloat **vertexCoord, GLfloat **textureCoord, unsigned *nbVertices,
@@ -827,10 +658,10 @@ static int BuildRectangle(GLfloat **vertexCoord, GLfloat **textureCoord, unsigne
     memcpy(*vertexCoord, coord, *nbVertices * 3 * sizeof(GLfloat));
 
     static const GLfloat tex[] = {
-        0.0, 0.0,
         0.0, 1.0,
-        1.0, 0.0,
+        0.0, 0.0,
         1.0, 1.0,
+        1.0, 0.0,
     };
 
     memcpy(*textureCoord, tex, *nbVertices * 2 * sizeof(GLfloat));
@@ -848,13 +679,14 @@ static int BuildRectangle(GLfloat **vertexCoord, GLfloat **textureCoord, unsigne
 static int SetupCoords(struct vlc_gl_renderer *renderer)
 {
     const opengl_vtable_t *vt = renderer->vt;
+    const video_format_t *fmt = renderer->sampler->fmt;
 
     GLfloat *vertexCoord, *textureCoord;
     GLushort *indices;
     unsigned nbVertices, nbIndices;
 
     int i_ret;
-    switch (renderer->fmt.projection_mode)
+    switch (fmt->projection_mode)
     {
     case PROJECTION_MODE_RECTANGULAR:
         i_ret = BuildRectangle(&vertexCoord, &textureCoord, &nbVertices,
@@ -865,8 +697,8 @@ static int SetupCoords(struct vlc_gl_renderer *renderer)
                             &indices, &nbIndices);
         break;
     case PROJECTION_MODE_CUBEMAP_LAYOUT_STANDARD:
-        i_ret = BuildCube((float)renderer->fmt.i_cubemap_padding / renderer->fmt.i_width,
-                          (float)renderer->fmt.i_cubemap_padding / renderer->fmt.i_height,
+        i_ret = BuildCube((float)fmt->i_cubemap_padding / fmt->i_width,
+                          (float)fmt->i_cubemap_padding / fmt->i_height,
                           &vertexCoord, &textureCoord, &nbVertices,
                           &indices, &nbIndices);
         break;
@@ -899,21 +731,16 @@ static int SetupCoords(struct vlc_gl_renderer *renderer)
     return VLC_SUCCESS;
 }
 
-static void DrawWithShaders(struct vlc_gl_renderer *renderer)
+int
+vlc_gl_renderer_Draw(struct vlc_gl_renderer *renderer)
 {
-    const struct vlc_gl_interop *interop = renderer->interop;
     const opengl_vtable_t *vt = renderer->vt;
-    renderer->pf_prepare_shader(renderer, renderer->tex_width,
-                                renderer->tex_height, 1.0f);
 
-    for (unsigned j = 0; j < interop->tex_count; j++) {
-        assert(renderer->textures[j] != 0);
-        vt->ActiveTexture(GL_TEXTURE0+j);
-        vt->BindTexture(interop->tex_target, renderer->textures[j]);
+    vt->Clear(GL_COLOR_BUFFER_BIT);
 
-        vt->UniformMatrix3fv(renderer->uloc.TexCoordsMap[j], 1, GL_FALSE,
-                             renderer->var.TexCoordsMap[j]);
-    }
+    vt->UseProgram(renderer->program_id);
+
+    vlc_gl_sampler_Load(renderer->sampler);
 
     vt->BindBuffer(GL_ARRAY_BUFFER, renderer->texture_buffer_object);
     assert(renderer->aloc.PicCoordsIn != -1);
@@ -925,16 +752,6 @@ static void DrawWithShaders(struct vlc_gl_renderer *renderer)
     vt->EnableVertexAttribArray(renderer->aloc.VertexPosition);
     vt->VertexAttribPointer(renderer->aloc.VertexPosition, 3, GL_FLOAT, 0, 0, 0);
 
-    const GLfloat *tm = NULL;
-    if (interop->ops && interop->ops->get_transform_matrix)
-        tm = interop->ops->get_transform_matrix(interop);
-    if (!tm)
-        tm = identity;
-
-    vt->UniformMatrix4fv(renderer->uloc.TransformMatrix, 1, GL_FALSE, tm);
-
-    vt->UniformMatrix4fv(renderer->uloc.OrientationMatrix, 1, GL_FALSE,
-                         renderer->var.OrientationMatrix);
     vt->UniformMatrix3fv(renderer->uloc.StereoMatrix, 1, GL_FALSE,
                          renderer->var.StereoMatrix);
     vt->UniformMatrix4fv(renderer->uloc.ProjectionMatrix, 1, GL_FALSE,
@@ -945,111 +762,6 @@ static void DrawWithShaders(struct vlc_gl_renderer *renderer)
                          renderer->var.ZoomMatrix);
 
     vt->DrawElements(GL_TRIANGLES, renderer->nb_indices, GL_UNSIGNED_SHORT, 0);
-}
-
-int
-vlc_gl_renderer_Prepare(struct vlc_gl_renderer *renderer, picture_t *picture)
-{
-    const struct vlc_gl_interop *interop = renderer->interop;
-    const video_format_t *source = &picture->format;
-
-    if (source->i_x_offset != renderer->last_source.i_x_offset
-     || source->i_y_offset != renderer->last_source.i_y_offset
-     || source->i_visible_width != renderer->last_source.i_visible_width
-     || source->i_visible_height != renderer->last_source.i_visible_height)
-    {
-        memset(renderer->var.TexCoordsMap, 0,
-               sizeof(renderer->var.TexCoordsMap));
-        for (unsigned j = 0; j < interop->tex_count; j++)
-        {
-            float scale_w = (float)interop->texs[j].w.num / interop->texs[j].w.den
-                          / renderer->tex_width[j];
-            float scale_h = (float)interop->texs[j].h.num / interop->texs[j].h.den
-                          / renderer->tex_height[j];
-
-            /* Warning: if NPOT is not supported a larger texture is
-               allocated. This will cause right and bottom coordinates to
-               land on the edge of two texels with the texels to the
-               right/bottom uninitialized by the call to
-               glTexSubImage2D. This might cause a green line to appear on
-               the right/bottom of the display.
-               There are two possible solutions:
-               - Manually mirror the edges of the texture.
-               - Add a "-1" when computing right and bottom, however the
-               last row/column might not be displayed at all.
-            */
-            float left   = (source->i_x_offset +                       0 ) * scale_w;
-            float top    = (source->i_y_offset +                       0 ) * scale_h;
-            float right  = (source->i_x_offset + source->i_visible_width ) * scale_w;
-            float bottom = (source->i_y_offset + source->i_visible_height) * scale_h;
-
-            /**
-             * This matrix converts from picture coordinates (in range [0; 1])
-             * to textures coordinates where the picture is actually stored
-             * (removing paddings).
-             *
-             *        texture           (in texture coordinates)
-             *       +----------------+--- 0.0
-             *       |                |
-             *       |  +---------+---|--- top
-             *       |  | picture |   |
-             *       |  +---------+---|--- bottom
-             *       |  .         .   |
-             *       |  .         .   |
-             *       +----------------+--- 1.0
-             *       |  .         .   |
-             *      0.0 left  right  1.0  (in texture coordinates)
-             *
-             * In particular:
-             *  - (0.0, 0.0) is mapped to (left, top)
-             *  - (1.0, 1.0) is mapped to (right, bottom)
-             *
-             * This is an affine 2D transformation, so the input coordinates
-             * are given as a 3D vector in the form (x, y, 1), and the output
-             * is (x', y', 1).
-             *
-             * The paddings are l (left), r (right), t (top) and b (bottom).
-             *
-             *               / (r-l)   0     l \
-             *      matrix = |   0   (b-t)   t |
-             *               \   0     0     1 /
-             *
-             * It is stored in column-major order.
-             */
-            GLfloat *matrix = renderer->var.TexCoordsMap[j];
-#define COL(x) (x*3)
-#define ROW(x) (x)
-            matrix[COL(0) + ROW(0)] = right - left;
-            matrix[COL(1) + ROW(1)] = bottom - top;
-            matrix[COL(2) + ROW(0)] = left;
-            matrix[COL(2) + ROW(1)] = top;
-#undef COL
-#undef ROW
-        }
-
-        renderer->last_source.i_x_offset = source->i_x_offset;
-        renderer->last_source.i_y_offset = source->i_y_offset;
-        renderer->last_source.i_visible_width = source->i_visible_width;
-        renderer->last_source.i_visible_height = source->i_visible_height;
-    }
-
-    /* Update the texture */
-    return interop->ops->update_textures(interop, renderer->textures,
-                                         renderer->tex_width,
-                                         renderer->tex_height, picture,
-                                         NULL);
-}
-
-int
-vlc_gl_renderer_Draw(struct vlc_gl_renderer *renderer)
-{
-    const opengl_vtable_t *vt = renderer->vt;
-
-    vt->Clear(GL_COLOR_BUFFER_BIT);
-
-    vt->UseProgram(renderer->program_id);
-
-    DrawWithShaders(renderer);
 
     return VLC_SUCCESS;
 }

@@ -34,11 +34,11 @@
 #include <vlc_common.h>
 
 typedef struct AWindowHandler AWindowHandler;
+typedef struct ASurfaceTexture ASurfaceTexture;
 
 enum AWindow_ID {
     AWindow_Video,
     AWindow_Subtitles,
-    AWindow_SurfaceTexture,
     AWindow_Max,
 };
 
@@ -72,10 +72,40 @@ typedef struct android_video_context_t android_video_context_t;
 
 struct android_video_context_t
 {
-    enum AWindow_ID id;
+    struct vlc_asurfacetexture *texture;
     void *dec_opaque;
     bool (*render)(struct picture_context_t *ctx);
     bool (*render_ts)(struct picture_context_t *ctx, vlc_tick_t ts);
+};
+
+struct vlc_asurfacetexture
+{
+    struct ANativeWindow *window;
+    jobject              *jsurface;
+
+    const struct vlc_asurfacetexture_operations *ops;
+};
+
+/**
+ * Wrapper structure for Android SurfaceTexture object.
+ *
+ * It can use either the NDK API or JNI API.
+ */
+struct vlc_asurfacetexture_operations
+{
+    int (*attach_to_gl_context)(
+            struct vlc_asurfacetexture *surface,
+            uint32_t tex_name);
+
+    void (*detach_from_gl_context)(
+            struct vlc_asurfacetexture *surface);
+
+    int (*update_tex_image)(
+            struct vlc_asurfacetexture *surface,
+            const float **pp_transform_mtx);
+
+    void (*destroy)(
+            struct vlc_asurfacetexture *surface);
 };
 
 /**
@@ -152,44 +182,35 @@ int AWindowHandler_setVideoLayout(AWindowHandler *p_awh,
  * \return 0 on success, -1 on error.
  */
 int
-SurfaceTexture_attachToGLContext(AWindowHandler *p_awh, int tex_name);
+SurfaceTexture_attachToGLContext(struct vlc_asurfacetexture *st, uint32_t tex_name);
 
 /**
  * Detach a SurfaceTexture from the OpenGL ES context that owns the OpenGL ES
  * texture object.
  */
 void
-SurfaceTexture_detachFromGLContext(AWindowHandler *p_awh);
+SurfaceTexture_detachFromGLContext(struct vlc_asurfacetexture *st);
 
 /**
- * Get a Java Surface from the attached SurfaceTexture
+ * Create a new SurfaceTexture object.
  *
- * This object can be used with mediacodec_jni.
+ * See Android SurfaceTexture
  */
-static inline jobject
-SurfaceTexture_getSurface(AWindowHandler *p_awh)
+struct vlc_asurfacetexture *
+vlc_asurfacetexture_New(AWindowHandler *p_awh);
+
+/**
+ * Delete a SurfaceTexture object created with SurfaceTexture_New.
+ */
+static inline void
+vlc_asurfacetexture_Delete(struct vlc_asurfacetexture *st)
 {
-    return AWindowHandler_getSurface(p_awh, AWindow_SurfaceTexture);
+    if (st->ops->destroy)
+        st->ops->destroy(st);
 }
 
 /**
- * Get a ANativeWindow from the attached SurfaceTexture
- *
- * This pointer can be used with mediacodec_ndk.
- */
-static inline ANativeWindow *
-SurfaceTexture_getANativeWindow(AWindowHandler *p_awh)
-{
-    return AWindowHandler_getANativeWindow(p_awh, AWindow_SurfaceTexture);
-}
-
-/**
- * Wait for a new frame and update it
- *
- * This function must be called from the OpenGL thread. This is an helper that
- * waits for a new frame via the Java SurfaceTexture.OnFrameAvailableListener
- * listener and update the frame via the SurfaceTexture.updateTexImage()
- * method.
+ * Update the SurfaceTexture to the most recent frame.
  *
  * \param pp_transform_mtx the transform matrix fetched from
  * SurfaceTexture.getTransformMatrix() after the
@@ -197,5 +218,4 @@ SurfaceTexture_getANativeWindow(AWindowHandler *p_awh)
  * \return VLC_SUCCESS or a VLC error
  */
 int
-SurfaceTexture_waitAndUpdateTexImage(AWindowHandler *p_awh,
-                                     const float **pp_transform_mtx);
+SurfaceTexture_updateTexImage(struct vlc_asurfacetexture *st, const float **pp_transform_mtx);

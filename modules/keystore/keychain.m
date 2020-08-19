@@ -32,12 +32,7 @@
 
 #include <TargetConditionals.h>
 
-#if TARGET_OS_IPHONE
-  #import <Foundation/Foundation.h>
-#else
-  #import <Cocoa/Cocoa.h>
-#endif
-
+#import <Foundation/Foundation.h>
 #import <Security/Security.h>
 
 // Marker to recognize changed format in vlc 4: secret does not have \0 cut off anymore.
@@ -433,7 +428,7 @@ static int Store(vlc_keystore *p_keystore,
         status = SecItemAdd((__bridge CFDictionaryRef)query, NULL);
     }
     if (status != errSecSuccess) {
-        msg_Err(p_keystore, "Storage failed (%i: '%s')", status, [ErrorForStatus(status) UTF8String]);
+        msg_Err(p_keystore, "Storage failed (%i: '%s')", (int)status, [ErrorForStatus(status) UTF8String]);
         return VLC_EGENERIC;
     }
 
@@ -467,7 +462,7 @@ static unsigned int Find(vlc_keystore *p_keystore,
 
     NSArray *listOfResults = (__bridge_transfer NSArray *)result;
     NSUInteger count = listOfResults.count;
-    msg_Dbg(p_keystore, "found %lu result(s) for the provided attributes", count);
+    msg_Dbg(p_keystore, "found %lu result(s) for the provided attributes", (unsigned long)count);
 
     vlc_keystore_entry *p_entries = calloc(count,
                                            sizeof(vlc_keystore_entry));
@@ -494,7 +489,7 @@ static unsigned int Find(vlc_keystore *p_keystore,
         CFTypeRef secretResult = NULL;
         status = SecItemCopyMatching((__bridge CFDictionaryRef)passwordFetchQuery, &secretResult);
         if (status != noErr) {
-            msg_Err(p_keystore, "Lookup error: %i (%s)", status, [ErrorForStatus(status) UTF8String]);
+            msg_Err(p_keystore, "Lookup error: %i (%s)", (int)status, [ErrorForStatus(status) UTF8String]);
             vlc_keystore_release_entries(p_entries, (unsigned int)count);
             return 0;
         }
@@ -540,13 +535,14 @@ static unsigned int Remove(vlc_keystore *p_keystore,
     /* do a copy matching to see how many items we are going to delete */
     status = SecItemCopyMatching((__bridge CFDictionaryRef)query, &result);
     if (status != errSecSuccess) {
-        msg_Warn(p_keystore, "lookup failed (%i: '%s')", status, [ErrorForStatus(status) UTF8String]);
+        msg_Warn(p_keystore, "lookup failed (%i: '%s')", (int)status, [ErrorForStatus(status) UTF8String]);
         return 0;
     }
 
     NSArray *listOfResults = (__bridge_transfer NSArray *)result;
     NSUInteger count = listOfResults.count;
-    msg_Dbg(p_keystore, "found %lu result(s) for the provided attributes", count);
+    msg_Dbg(p_keystore, "found %lu result(s) for the provided attributes",
+            (unsigned long)count);
 
     /* delete everything!! */
     status = SecItemDelete((__bridge CFDictionaryRef)query);

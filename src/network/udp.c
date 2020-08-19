@@ -40,7 +40,9 @@
 #ifdef _WIN32
 #   undef EAFNOSUPPORT
 #   define EAFNOSUPPORT WSAEAFNOSUPPORT
-#   include <wincrypt.h>
+#   if defined(__MINGW64_VERSION_MAJOR) && __MINGW64_VERSION_MAJOR < 6
+#    include <wincrypt.h>
+#   endif
 #   include <iphlpapi.h>
 #else
 #   include <unistd.h>
@@ -291,7 +293,7 @@ static int net_SetMcastOut (vlc_object_t *p_this, int fd, int family,
 }
 
 
-#ifdef MCAST_JOIN_GROUP
+#if defined(MCAST_JOIN_GROUP) && !defined (__APPLE__)
 static unsigned var_GetIfIndex (vlc_object_t *obj)
 {
     char *ifname = var_InheritString (obj, "miface");

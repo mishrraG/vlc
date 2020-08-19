@@ -29,6 +29,7 @@
 #include "gl_api.h"
 #include "gl_common.h"
 #include "interop.h"
+#include "sampler.h"
 
 struct pl_context;
 struct pl_shader;
@@ -42,49 +43,27 @@ struct vlc_gl_renderer
     /* Pointer to object gl, set by the caller */
     vlc_gl_t *gl;
 
-    /* libplacebo context, created by the caller (optional) */
-    struct pl_context *pl_ctx;
-
     /* Set by the caller */
     const struct vlc_gl_api *api;
     const opengl_vtable_t *vt; /* for convenience, same as &api->vt */
 
-    /* True to dump shaders, set by the caller */
-    bool b_dump_shaders;
-
-    /* GLSL version, set by the caller. 100 for GLSL ES, 120 for desktop GLSL */
-    unsigned glsl_version;
-    /* Precision header, set by the caller. In OpenGLES, the fragment language
-     * has no default precision qualifier for floating point types. */
-    const char *glsl_precision_header;
+    /* True to dump shaders */
+    bool dump_shaders;
 
     GLuint program_id;
 
     struct {
-        GLfloat OrientationMatrix[16];
         GLfloat ProjectionMatrix[16];
         GLfloat StereoMatrix[3*3];
         GLfloat ZoomMatrix[16];
         GLfloat ViewMatrix[16];
-
-        GLfloat TexCoordsMap[PICTURE_PLANE_MAX][3*3];
     } var;
 
     struct {
-        GLint Texture[PICTURE_PLANE_MAX];
-        GLint TexSize[PICTURE_PLANE_MAX]; /* for GL_TEXTURE_RECTANGLE */
-        GLint ConvMatrix;
-        GLint FillColor;
-        GLint *pl_vars; /* for pl_sh_res */
-
-        GLint TransformMatrix;
-        GLint OrientationMatrix;
         GLint StereoMatrix;
         GLint ProjectionMatrix;
         GLint ViewMatrix;
         GLint ZoomMatrix;
-
-        GLint TexCoordsMap[PICTURE_PLANE_MAX];
     } uloc;
 
     struct {
@@ -92,32 +71,12 @@ struct vlc_gl_renderer
         GLint VertexPosition;
     } aloc;
 
-    bool yuv_color;
-    GLfloat conv_matrix[16];
-
-    struct pl_shader *pl_sh;
-    const struct pl_shader_res *pl_sh_res;
-
-    struct vlc_gl_interop *interop;
-
-    video_format_t fmt;
-
-    GLsizei tex_width[PICTURE_PLANE_MAX];
-    GLsizei tex_height[PICTURE_PLANE_MAX];
-
-    GLuint textures[PICTURE_PLANE_MAX];
+    struct vlc_gl_sampler *sampler;
 
     unsigned nb_indices;
     GLuint vertex_buffer_object;
     GLuint index_buffer_object;
     GLuint texture_buffer_object;
-
-    struct {
-        unsigned int i_x_offset;
-        unsigned int i_y_offset;
-        unsigned int i_visible_width;
-        unsigned int i_visible_height;
-    } last_source;
 
     /* View point */
     vlc_viewpoint_t vp;
@@ -128,33 +87,6 @@ struct vlc_gl_renderer
     float f_fovy; /* to avoid recalculating them when needed.      */
     float f_z;    /* Position of the camera on the shpere radius vector */
     float f_sar;
-
-    /**
-     * Callback to fetch locations of uniform or attributes variables
-     *
-     * This function pointer cannot be NULL. This callback is called one time
-     * after init.
-     *
-     * \param renderer OpenGL renderer
-     * \param program linked program that will be used by this renderer
-     * \return VLC_SUCCESS or a VLC error
-     */
-    int (*pf_fetch_locations)(struct vlc_gl_renderer *renderer, GLuint program);
-
-    /**
-     * Callback to prepare the fragment shader
-     *
-     * This function pointer cannot be NULL. This callback can be used to
-     * specify values of uniform variables.
-     *
-     * \param renderer OpenGL renderer
-     * \param tex_width array of tex width (one per plane)
-     * \param tex_height array of tex height (one per plane)
-     * \param alpha alpha value, used only for RGBA fragment shader
-     */
-    void (*pf_prepare_shader)(const struct vlc_gl_renderer *renderer,
-                              const GLsizei *tex_width, const GLsizei *tex_height,
-                              float alpha);
 };
 
 /**
@@ -162,14 +94,11 @@ struct vlc_gl_renderer
  *
  * \param gl the GL context
  * \param api the OpenGL API
- * \param context the video context
- * \param fmt the video format
- * \param dump_shaders indicate if the shaders must be dumped in logs
+ * \param sampler the OpenGL sampler
  */
 struct vlc_gl_renderer *
 vlc_gl_renderer_New(vlc_gl_t *gl, const struct vlc_gl_api *api,
-                    vlc_video_context *context, const video_format_t *fmt,
-                    bool dump_shaders);
+                    struct vlc_gl_sampler *sampler);
 
 /**
  * Delete a renderer
@@ -178,18 +107,6 @@ vlc_gl_renderer_New(vlc_gl_t *gl, const struct vlc_gl_api *api,
  */
 void
 vlc_gl_renderer_Delete(struct vlc_gl_renderer *renderer);
-
-/**
- * Prepare the fragment shader
- *
- * Concretely, it allocates OpenGL textures if necessary and uploads the
- * picture.
- *
- * \param sr the renderer
- * \param subpicture the subpicture to render
- */
-int
-vlc_gl_renderer_Prepare(struct vlc_gl_renderer *renderer, picture_t *picture);
 
 /**
  * Draw the prepared picture

@@ -26,7 +26,7 @@
 #        shared: Shared libraries and modules
 
 # Dir of this script
-readonly VLC_SCRIPT_DIR="${BASH_SOURCE%/*}"
+readonly VLC_SCRIPT_DIR="$(cd "${BASH_SOURCE%/*}"; pwd)"
 
 # Verify script run location
 [ ! -f "$(pwd)/../src/libvlc.h" ] \
@@ -89,13 +89,26 @@ VLC_USE_PREBUILT_CONTRIBS=0
 # User-provided URL from where to fetch contribs, empty
 # for the default chosen by contrib system
 VLC_PREBUILT_CONTRIBS_URL=${VLC_PREBUILT_CONTRIBS_URL:-""}
-# The number of cores to compile on
-CORE_COUNT=$(sysctl -n machdep.cpu.core_count)
+# The number of cores to compile on, or 0 + 1 if not darwin
+CORE_COUNT=$(sysctl -n machdep.cpu.core_count || echo 0)
 let VLC_USE_NUMBER_OF_CORES=$CORE_COUNT+1
 # whether to disable debug mode (the default) or not
 VLC_DISABLE_DEBUG=0
 # whether to compile with bitcode or not
 VLC_USE_BITCODE=0
+# whether to build static or dynamic plugins
+VLC_BUILD_DYNAMIC=0
+
+# Tools to be used
+VLC_HOST_CC="$(xcrun --find clang)"
+VLC_HOST_CPP="$(xcrun --find clang) -E"
+VLC_HOST_CXX="$(xcrun --find clang++)"
+VLC_HOST_OBJC="$(xcrun --find clang)"
+VLC_HOST_LD="$(xcrun --find ld)"
+VLC_HOST_AR="$(xcrun --find ar)"
+VLC_HOST_STRIP="$(xcrun --find strip)"
+VLC_HOST_RANLIB="$(xcrun --find ranlib)"
+VLC_HOST_NM="$(xcrun --find nm)"
 
 ##########################################################
 #                    Helper functions                    #
@@ -117,6 +130,7 @@ usage()
     echo " --package-contribs        Create a prebuilt contrib package"
     echo " --with-prebuilt-contribs  Use prebuilt contribs instead of building"
     echo "                           them from source"
+    echo " --enable-shared           Build dynamic libraries and plugins"
     echo "Environment variables:"
     echo " VLC_PREBUILT_CONTRIBS_URL  URL to fetch the prebuilt contrib archive"
     echo "                            from when --with-prebuilt-contribs is used"
@@ -208,7 +222,7 @@ validate_architecture()
 #   Architecture string
 set_host_triplet()
 {
-    local triplet_arch=$(${CC:-cc} -arch "$1" -dumpmachine | cut -d- -f 1)
+    local triplet_arch=$(${VLC_HOST_CC:-cc} -arch "$1" -dumpmachine | cut -d- -f 1)
     # We can not directly use the compiler value here as when building for
     # x86_64 iOS Simulator the triplet will match the build machine triplet
     # exactly, which will cause autoconf to assume we are not cross-compiling.
@@ -298,17 +312,22 @@ set_host_envvars()
     export CXXFLAGS="$clike_flags"
     export OBJCFLAGS="$clike_flags"
 
-    export LDFLAGS="$VLC_DEPLOYMENT_TARGET_LDFLAG -arch $VLC_HOST_ARCH"
+    # Vanilla clang doesn't use VLC_DEPLOYMENT_TAGET_LDFLAGS but only the CFLAGS variant
+    export LDFLAGS="$VLC_DEPLOYMENT_TARGET_LDFLAG $VLC_DEPLOYMENT_TARGET_CFLAG -arch $VLC_HOST_ARCH"
+}
 
-    # Tools to be used
-    export CC="clang"
-    export CPP="clang -E"
-    export CXX="clang++"
-    export OBJC="clang"
-    export LD="ld"
-    export AR="ar"
-    export STRIP="strip"
-    export RANLIB="ranlib"
+hostenv()
+{
+    CC="${VLC_HOST_CC}" \
+    CPP="${VLC_HOST_CPP}" \
+    CXX="${VLC_HOST_CXX}" \
+    OBJC="${VLC_HOST_OBJC}" \
+    LD="${VLC_HOST_LD}" \
+    AR="${VLC_HOST_AR}" \
+    STRIP="${VLC_HOST_STRIP}" \
+    RANLIB="${VLC_HOST_RANLIB}" \
+    NM="${VLC_HOST_NM}" \
+    "$@"
 }
 
 # Write config.mak for contribs
@@ -330,7 +349,8 @@ write_config_mak()
     local vlc_cxxflags="$clike_flags"
     local vlc_objcflags="$clike_flags"
 
-    local vlc_ldflags="$VLC_DEPLOYMENT_TARGET_LDFLAG -arch $VLC_HOST_ARCH"
+    # Vanilla clang doesn't use VLC_DEPLOYMENT_TAGET_LDFLAGS but only the CFLAGS variant
+    local vlc_ldflags="$VLC_DEPLOYMENT_TARGET_LDFLAG $VLC_DEPLOYMENT_TARGET_CFLAG  -arch $VLC_HOST_ARCH"
 
     echo "Creating makefile..."
     test -e config.mak && unlink config.mak
@@ -342,14 +362,15 @@ write_config_mak()
     printf '%s := %s\n' "CXXFLAGS" "${vlc_cxxflags}" >&3
     printf '%s := %s\n' "OBJCFLAGS" "${vlc_objcflags}" >&3
     printf '%s := %s\n' "LDFLAGS" "${vlc_ldflags}" >&3
-    printf '%s := %s\n' "CC" "clang" >&3
-    printf '%s := %s\n' "CPP" "clang -E" >&3
-    printf '%s := %s\n' "CXX" "clang++" >&3
-    printf '%s := %s\n' "OBJC" "clang" >&3
-    printf '%s := %s\n' "LD" "ld" >&3
-    printf '%s := %s\n' "AR" "ar" >&3
-    printf '%s := %s\n' "STRIP" "strip" >&3
-    printf '%s := %s\n' "RANLIB" "ranlib" >&3
+    printf '%s := %s\n' "CC" "${VLC_HOST_CC}" >&3
+    printf '%s := %s\n' "CPP" "${VLC_HOST_CPP}" >&3
+    printf '%s := %s\n' "CXX" "${VLC_HOST_CXX}" >&3
+    printf '%s := %s\n' "OBJC" "${VLC_HOST_OBJC}" >&3
+    printf '%s := %s\n' "LD" "${VLC_HOST_LD}" >&3
+    printf '%s := %s\n' "AR" "${VLC_HOST_AR}" >&3
+    printf '%s := %s\n' "STRIP" "${VLC_HOST_STRIP}" >&3
+    printf '%s := %s\n' "RANLIB" "${VLC_HOST_RANLIB}" >&3
+    printf '%s := %s\n' "NM" "${VLC_HOST_NM}" >&3
 }
 
 # Generate the source file with the needed array for
@@ -420,8 +441,14 @@ do
         --with-prebuilt-contribs)
             VLC_USE_PREBUILT_CONTRIBS=1
             ;;
+        --enable-shared)
+            VLC_BUILD_DYNAMIC=1
+            ;;
         VLC_PREBUILT_CONTRIBS_URL=*)
             VLC_PREBUILT_CONTRIBS_URL="${1#VLC_PREBUILT_CONTRIBS_URL=}"
+            ;;
+        -j*)
+            VLC_USE_NUMBER_OF_CORES=${1#-j}
             ;;
         *)
             echo >&2 "ERROR: Unrecognized option '$1'"
@@ -471,6 +498,11 @@ echo "  Platform:         $VLC_HOST_PLATFORM"
 echo "  Architecture:     $VLC_HOST_ARCH"
 echo "  SDK Version:      $VLC_APPLE_SDK_VERSION"
 echo "  Number of Cores:  $VLC_USE_NUMBER_OF_CORES"
+if [ "$VLC_USE_BITCODE" -gt 0 ]; then
+echo "  Bitcode:          enabled"
+else
+echo "  Bitcode:          disabled"
+fi
 echo ""
 
 ##########################################################
@@ -521,7 +553,10 @@ echo "Building needed tools (if missing)"
 cd "$VLC_SRC_DIR/extras/tools" || abort_err "Failed cd to tools dir"
 ./bootstrap || abort_err "Bootstrapping tools failed"
 $MAKE -j$VLC_USE_NUMBER_OF_CORES || abort_err "Building tools failed"
-
+if [ $VLC_HOST_ARCH = "armv7" ]; then
+$MAKE -j$VLC_USE_NUMBER_OF_CORES .buildgas \
+    || abort_err "Building gas-preprocessor tool failed"
+fi
 echo ""
 
 ##########################################################
@@ -616,6 +651,12 @@ if [ "$VLC_DISABLE_DEBUG" -gt "0" ]; then
     VLC_CONFIG_OPTIONS+=( "--disable-debug" )
 fi
 
+if [ "$VLC_BUILD_DYNAMIC" -gt "0" ]; then
+    VLC_CONFIG_OPTIONS+=( "--enable-shared" )
+else
+    VLC_CONFIG_OPTIONS+=( "--disable-shared" "--enable-static" )
+fi
+
 # Bootstrap VLC
 cd "$VLC_SRC_DIR" || abort_err "Failed cd to VLC source dir"
 if ! [ -e configure ]; then
@@ -630,7 +671,7 @@ cd "${VLC_BUILD_DIR}/build" || abort_err "Failed cd to VLC build dir"
 # Create VLC install dir if it does not already exist
 mkdir -p "$VLC_INSTALL_DIR"
 
-../../configure \
+hostenv ../../configure \
     --with-contrib="$VLC_CONTRIB_INSTALL_DIR" \
     --host="$VLC_HOST_TRIPLET" \
     --prefix="$VLC_INSTALL_DIR" \
@@ -642,6 +683,11 @@ $MAKE -j$VLC_USE_NUMBER_OF_CORES || abort_err "Building VLC failed"
 $MAKE install || abort_err "Installing VLC failed"
 
 echo ""
+# Shortcut the build of the static bundle when using the dynamic loader
+if [ "$VLC_BUILD_DYNAMIC" -gt "0" ]; then
+    echo "Build succeeded!"
+    exit 0
+fi
 
 ##########################################################
 #                 Remove unused modules                  #
@@ -689,7 +735,7 @@ VLC_PLUGINS_SYMBOL_LIST=()
 # Find all static plugins in build dir
 while IFS=  read -r -d $'\0' plugin_path; do
     # Get module entry point symbol name (_vlc_entry__MODULEFULLNAME)
-    nm_symbol_output=( $(nm "$plugin_path" | grep _vlc_entry__) ) \
+    nm_symbol_output=( $(${VLC_HOST_NM} "$plugin_path" | grep _vlc_entry__) ) \
       || abort_err "Failed to find module entry function in '$plugin_path'"
 
     symbol_name="${nm_symbol_output[2]:1}"
@@ -704,7 +750,7 @@ VLC_STATIC_MODULELIST_NAME="static-module-list"
 rm -f "${VLC_STATIC_MODULELIST_NAME}.c" "${VLC_STATIC_MODULELIST_NAME}.o"
 gen_vlc_static_module_list "${VLC_STATIC_MODULELIST_NAME}.c" "${VLC_PLUGINS_SYMBOL_LIST[@]}"
 
-${CC:-cc} -c  ${CFLAGS} "${VLC_STATIC_MODULELIST_NAME}.c" \
+${VLC_HOST_CC:-cc} -c  ${CFLAGS} "${VLC_STATIC_MODULELIST_NAME}.c" \
   || abort_err "Compiling module list file failed"
 
 echo "${VLC_BUILD_DIR}/static-lib/${VLC_STATIC_MODULELIST_NAME}.o" \
@@ -731,7 +777,7 @@ $APPL_LIBTOOL -static \
     -no_warning_for_no_symbols \
     -filelist "$VLC_STATIC_FILELIST_NAME" \
     -o "libvlc-full-static.a" \
-  || abort_err "Faile running Apple libtool to combine static libraries together"
+  || abort_err "Failed running Apple libtool to combine static libraries together"
 
 echo ""
 echo "Build succeeded!"

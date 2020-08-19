@@ -16,36 +16,26 @@
  * Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston MA 02110-1301, USA.
  *****************************************************************************/
 import QtQuick 2.11
-import QtQml.Models 2.2
+import QtQml.Models 2.11
 
-DelegateModel {
+ItemSelectionModel {
     id: delegateModel
 
     property int shiftIndex: -1
-    property alias selectedGroup: selectedGroup
-
-    groups: [
-        DelegateModelGroup { id: selectedGroup; name: "selected"; includeByDefault: false }
-    ]
 
     function _addRange(from, to) {
         for (var i = from; i <= to; i++) {
-            delegateModel.items.get(i).inSelected = true
+            select(model.index(i, 0), ItemSelectionModel.Select)
         }
     }
     function _delRange(from, to) {
         for (var i = from; i <= to; i++) {
-            delegateModel.items.get(i).inSelected = false
+            select(model.index(i, 0), ItemSelectionModel.Deselect)
         }
     }
 
-    function selectNone() {
-        if (selectedGroup.count > 0)
-            selectedGroup.remove(0,selectedGroup.count)
-    }
-
     function selectAll() {
-        delegateModel.items.addGroups(0, delegateModel.items.count, ["selected"])
+        select(model.index(0, 0), ItemSelectionModel.Select | ItemSelectionModel.Columns)
     }
 
     function updateSelection( keymodifiers, oldIndex, newIndex ) {
@@ -71,12 +61,10 @@ DelegateModel {
                 _delRange(oldIndex, newIndex - 1)
             }
         } else {
-            var e = delegateModel.items.get(newIndex)
             if ((keymodifiers & Qt.ControlModifier) == Qt.ControlModifier) {
-                e.inSelected = !e.inSelected
+                select(model.index(newIndex, 0), ItemSelectionModel.Toggle)
             } else {
-                selectNone()
-                e.inSelected = true
+                select(model.index(newIndex, 0), ItemSelectionModel.ClearAndSelect)
             }
             shiftIndex = newIndex
         }

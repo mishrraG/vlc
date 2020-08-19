@@ -515,6 +515,7 @@ static int Seek( demux_t *p_demux, vlc_tick_t i_mk_date, double f_percent, virtu
 
 /* Needed by matroska_segment::Seek() and Seek */
 void BlockDecode( demux_t *p_demux, KaxBlock *block, KaxSimpleBlock *simpleblock,
+                  KaxBlockAdditions *additions,
                   vlc_tick_t i_pts, int64_t i_duration, bool b_key_picture,
                   bool b_discardable_picture )
 {
@@ -624,13 +625,26 @@ void BlockDecode( demux_t *p_demux, KaxBlock *block, KaxSimpleBlock *simpleblock
 
          case VLC_CODEC_WEBVTT:
             {
-                p_block = block_Realloc( p_block, 16, p_block->i_buffer );
+                const uint8_t *p_addition = NULL;
+                size_t i_addition = 0;
+                if(additions)
+                {
+                    KaxBlockMore *blockmore = FindChild<KaxBlockMore>(*additions);
+                    if(blockmore)
+                    {
+                        KaxBlockAdditional *addition = FindChild<KaxBlockAdditional>(*blockmore);
+                        if(addition)
+                        {
+                            i_addition = static_cast<std::string::size_type>(addition->GetSize());
+                            p_addition = reinterpret_cast<const uint8_t *>(addition->GetBuffer());
+                        }
+                    }
+                }
+                p_block = WEBVTT_Repack_Sample( p_block, /* D_WEBVTT -> webm */
+                                                !p_track->codec.compare( 0, 1, "D" ),
+                                                p_addition, i_addition );
                 if( !p_block )
                     continue;
-                SetDWBE( p_block->p_buffer, p_block->i_buffer );
-                memcpy( &p_block->p_buffer[4], "vttc", 4 );
-                SetDWBE( &p_block->p_buffer[8], p_block->i_buffer - 8 );
-                memcpy( &p_block->p_buffer[12], "payl", 4 );
             }
             break;
 
@@ -736,11 +750,13 @@ static int Demux( demux_t *p_demux)
 
     KaxBlock *block;
     KaxSimpleBlock *simpleblock;
+    KaxBlockAdditions *additions;
     int64_t i_block_duration = 0;
     bool b_key_picture;
     bool b_discardable_picture;
 
-    if( p_segment->BlockGet( block, simpleblock, &b_key_picture, &b_discardable_picture, &i_block_duration ) )
+    if( p_segment->BlockGet( block, simpleblock, additions,
+                             &b_key_picture, &b_discardable_picture, &i_block_duration ) )
     {
         if ( p_vsegment->CurrentEdition() && p_vsegment->CurrentEdition()->b_ordered )
         {
@@ -772,6 +788,7 @@ static int Demux( demux_t *p_demux)
         {
             msg_Err( p_demux, "invalid track number" );
             delete block;
+            delete additions;
             return VLC_DEMUXER_EGENERIC;
         }
 
@@ -785,6 +802,7 @@ static int Demux( demux_t *p_demux)
             if ( track.i_skip_until_fpos > block_fpos )
             {
                 delete block;
+                delete additions;
                 return VLC_DEMUXER_SUCCESS; // this block shall be ignored
             }
         }
@@ -817,6 +835,8 @@ static int Demux( demux_t *p_demux)
             if( es_out_SetPCR( p_demux->out, i_pcr ) )
             {
                 msg_Err( p_demux, "ES_OUT_SET_PCR failed, aborting." );
+                delete block;
+                delete additions;
                 return VLC_DEMUXER_EGENERIC;
             }
 
@@ -836,12 +856,15 @@ static int Demux( demux_t *p_demux)
     {
         /* nothing left to read in this ordered edition */
         delete block;
+        delete additions;
         return VLC_DEMUXER_EOF;
     }
 
-    BlockDecode( p_demux, block, simpleblock, p_sys->i_pts, i_block_duration, b_key_picture, b_discardable_picture );
+    BlockDecode( p_demux, block, simpleblock, additions,
+                 p_sys->i_pts, i_block_duration, b_key_picture, b_discardable_picture );
 
     delete block;
+    delete additions;
 
     return VLC_DEMUXER_SUCCESS;
 }

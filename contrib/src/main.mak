@@ -70,6 +70,7 @@ endif
 ifneq ($(findstring $(origin AR),undefined default),)
 AR := ar
 endif
+NM ?= nm
 RANLIB ?= ranlib
 STRIP ?= strip
 WIDL ?= widl
@@ -88,6 +89,7 @@ endif
 ifneq ($(findstring $(origin AR),undefined default),)
 AR := $(HOST)-ar
 endif
+NM ?= $(HOST)-nm
 RANLIB ?= $(HOST)-ranlib
 STRIP ?= $(HOST)-strip
 WIDL ?= $(HOST)-widl
@@ -129,16 +131,11 @@ endif
 
 ifdef HAVE_MACOSX
 EXTRA_CXXFLAGS += -stdlib=libc++
-ifeq ($(ARCH),x86_64)
-EXTRA_CFLAGS += -m64
-EXTRA_LDFLAGS += -m64
+ifeq ($(ARCH),aarch64)
+XCODE_FLAGS += -arch arm64
 else
-EXTRA_CFLAGS += -m32
-EXTRA_LDFLAGS += -m32
-endif
-
 XCODE_FLAGS += -arch $(ARCH)
-
+endif
 endif
 
 CCAS=$(CC) -c
@@ -154,6 +151,8 @@ LN_S = ln -s
 ifdef HAVE_WIN32
 ifneq ($(shell $(CC) $(CFLAGS) -E -dM -include _mingw.h - < /dev/null | grep -E __MINGW64_VERSION_MAJOR),)
 HAVE_MINGW_W64 := 1
+MINGW_W64_VERSION := $(shell $(CC) $(CFLAGS) -E -dM -include _mingw.h - < /dev/null | grep -E 'define\s__MINGW64_VERSION_MAJOR' | sed -e 's/\#define\s__MINGW64_VERSION_MAJOR\s//')
+HAVE_MINGW64_V8 := $(shell [ $(MINGW_W64_VERSION) -gt 7 ] && echo true)
 endif
 ifndef HAVE_CROSS_COMPILE
 LN_S = cp -R
@@ -172,7 +171,7 @@ endif
 
 ifdef HAVE_WINSTORE
 EXTRA_CFLAGS += -DWINSTORECOMPAT
-EXTRA_LDFLAGS += -lwinstorecompat
+EXTRA_LDFLAGS += -lwindowsappcompat
 endif
 
 ifneq ($(findstring clang, $(shell $(CC) --version 2>/dev/null)),)
@@ -188,8 +187,12 @@ CXXFLAGS := $(CXXFLAGS) $(EXTRA_CFLAGS) $(EXTRA_CXXFLAGS)
 LDFLAGS := $(LDFLAGS) -L$(PREFIX)/lib $(EXTRA_LDFLAGS)
 
 ifdef ENABLE_PDB
+ifdef HAVE_CLANG
+ifneq ($(findstring $(ARCH),i686 x86_64),)
 CFLAGS := $(CFLAGS) -gcodeview
 CXXFLAGS := $(CXXFLAGS) -gcodeview
+endif
+endif
 endif
 
 # Do not export those! Use HOSTVARS.
@@ -390,7 +393,8 @@ endif
 RECONF = mkdir -p -- $(PREFIX)/share/aclocal && \
 	cd $< && $(AUTORECONF) -fiv $(ACLOCAL_AMFLAGS)
 CMAKE = cmake . -DCMAKE_TOOLCHAIN_FILE=$(abspath toolchain.cmake) \
-		-DCMAKE_INSTALL_PREFIX=$(PREFIX) $(CMAKE_GENERATOR)
+		-DCMAKE_INSTALL_PREFIX=$(PREFIX) $(CMAKE_GENERATOR) \
+		-DBUILD_SHARED_LIBS:BOOL=OFF
 ifdef HAVE_WIN32
 CMAKE += -DCMAKE_DEBUG_POSTFIX:STRING=
 endif
@@ -408,7 +412,7 @@ MESONFLAGS = --default-library static --prefix "$(PREFIX)" --backend ninja \
 ifndef WITH_OPTIMIZATION
 MESONFLAGS += --buildtype debug
 else
-MESONFLAGS += --buildtype release
+MESONFLAGS += --buildtype debugoptimized
 endif
 
 ifdef HAVE_CROSS_COMPILE
@@ -424,7 +428,11 @@ ifdef HAVE_CROSS_COMPILE
 # expected.
 MESONFLAGS += --cross-file $(abspath crossfile.meson)
 MESON = env -i PATH="$(PREFIX)/bin:$(PATH)" PKG_CONFIG_LIBDIR="$(PKG_CONFIG_LIBDIR)" \
-	PKG_CONFIG_PATH="$(PKG_CONFIG_PATH)" meson $(MESONFLAGS)
+	PKG_CONFIG_PATH="$(PKG_CONFIG_PATH)" \
+	meson -Dpkg_config_libdir="$(PKG_CONFIG_LIBDIR)" \
+	-Dpkg_config_path="$(PKG_CONFIG_PATH)" \
+	$(MESONFLAGS)
+
 else
 MESON = meson $(MESONFLAGS)
 endif
@@ -561,7 +569,7 @@ toolchain.cmake:
 ifndef WITH_OPTIMIZATION
 	echo "set(CMAKE_BUILD_TYPE Debug)" >> $@
 else
-	echo "set(CMAKE_BUILD_TYPE Release)" >> $@
+	echo "set(CMAKE_BUILD_TYPE RelWithDebInfo)" >> $@
 endif
 	echo "set(CMAKE_SYSTEM_PROCESSOR $(ARCH))" >> $@
 	if test -n "$(CMAKE_SYSTEM_NAME)"; then \
@@ -576,15 +584,13 @@ ifdef HAVE_DARWIN_OS
 	echo "set(CMAKE_C_FLAGS \"$(CFLAGS)\")" >> $@
 	echo "set(CMAKE_CXX_FLAGS \"$(CXXFLAGS)\")" >> $@
 	echo "set(CMAKE_LD_FLAGS \"$(LDFLAGS)\")" >> $@
-	echo "set(CMAKE_AR ar CACHE FILEPATH \"Archiver\")" >> $@
 ifdef HAVE_IOS
 	echo "set(CMAKE_OSX_SYSROOT $(IOS_SDK))" >> $@
 else
 	echo "set(CMAKE_OSX_SYSROOT $(MACOSX_SDK))" >> $@
 endif
-else
-	echo "set(CMAKE_AR $(AR) CACHE FILEPATH \"Archiver\")" >> $@
 endif
+	echo "set(CMAKE_AR $(AR) CACHE FILEPATH \"Archiver\")" >> $@
 ifdef HAVE_CROSS_COMPILE
 	echo "set(_CMAKE_TOOLCHAIN_PREFIX $(HOST)-)" >> $@
 ifdef HAVE_ANDROID

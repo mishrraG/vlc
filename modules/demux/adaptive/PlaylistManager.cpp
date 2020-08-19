@@ -38,6 +38,9 @@
 #include "logic/NearOptimalAdaptationLogic.hpp"
 #include "logic/BufferingLogic.hpp"
 #include "tools/Debug.hpp"
+#ifdef ADAPTIVE_DEBUGGING_LOGIC
+# include "logic/RoundRobinLogic.hpp"
+#endif
 #include <vlc_stream.h>
 #include <vlc_demux.h>
 #include <vlc_threads.h>
@@ -249,7 +252,10 @@ AbstractStream::buffering_status PlaylistManager::bufferize(vlc_tick_t i_nzdeadl
             /* initial */
         }
 
-        AbstractStream::buffering_status i_ret = st->bufferize(i_nzdeadline, i_min_buffering, i_extra_buffering);
+        AbstractStream::buffering_status i_ret = st->bufferize(i_nzdeadline,
+                                                               i_min_buffering,
+                                                               i_extra_buffering,
+                                                               getActiveStreamsCount() <= 1);
         if(i_return != AbstractStream::buffering_ongoing) /* Buffering streams need to keep going */
         {
             if(i_ret > i_return)
@@ -338,6 +344,18 @@ vlc_tick_t PlaylistManager::getFirstDTS() const
             mindts = std::min(mindts, dts);
     }
     return mindts;
+}
+
+unsigned PlaylistManager::getActiveStreamsCount() const
+{
+    unsigned count = 0;
+    std::vector<AbstractStream *>::const_iterator it;
+    for(it=streams.begin(); it!=streams.end(); ++it)
+    {
+        if((*it)->isValid() && !(*it)->isDisabled())
+            count++;
+    }
+    return count;
 }
 
 bool PlaylistManager::setPosition(vlc_tick_t time)
@@ -800,6 +818,11 @@ AbstractAdaptationLogic *PlaylistManager::createLogic(AbstractAdaptationLogic::L
             break;
         }
         case AbstractAdaptationLogic::Default:
+#ifdef ADAPTIVE_DEBUGGING_LOGIC
+            logic = new (std::nothrow) RoundRobinLogic(obj);
+            msg_Warn(p_demux, "using RoundRobinLogic every %u", RoundRobinLogic::QUANTUM);
+            break;
+#endif
         case AbstractAdaptationLogic::NearOptimal:
         {
             NearOptimalAdaptationLogic *noplogic =

@@ -1624,7 +1624,7 @@ static int Direct3D9Open(vout_display_t *vd, video_format_t *fmt, vlc_video_cont
      * typically support more formats than textures */
     const d3d9_format_t *d3dfmt = Direct3DFindFormat(vd, &vd->source, vctx);
     if (!d3dfmt) {
-        msg_Err(vd, "unsupported source pixel format %4.4s", &vd->source.i_chroma);
+        msg_Err(vd, "unsupported source pixel format %4.4s", (const char*)&vd->source.i_chroma);
         goto error;
     }
     msg_Dbg(vd, "found input surface format %s for source %4.4s", d3dfmt->name, (const char *)&vd->source.i_chroma);
@@ -1707,7 +1707,7 @@ static int Control(vout_display_t *vd, int query, va_list args)
         return VLC_SUCCESS;
     }
     default:
-        return CommonControl(VLC_OBJECT(vd), &sys->area, &sys->sys, query, args);
+        return CommonControl(vd, &sys->area, &sys->sys, query, args);
     }
 }
 
@@ -1815,7 +1815,7 @@ static int Open(vout_display_t *vd, const vout_display_cfg_t *cfg,
     if ( sys->swapCb == NULL || sys->startEndRenderingCb == NULL || sys->updateOutputCb == NULL )
     {
         /* use our own callbacks, since there isn't any external ones */
-        if (CommonWindowInit(VLC_OBJECT(vd), &sys->area, &sys->sys, false))
+        if (CommonWindowInit(vd, &sys->area, &sys->sys, false))
             goto error;
 
         sys->outside_opaque = vd;
@@ -1853,7 +1853,7 @@ static int Open(vout_display_t *vd, const vout_display_cfg_t *cfg,
     }
 
     if (sys->swapCb == LocalSwapchainSwap)
-        CommonPlacePicture(VLC_OBJECT(vd), &sys->area, &sys->sys);
+        CommonPlacePicture(vd, &sys->area, &sys->sys);
 
     sys->hxdll = Direct3D9LoadShaderLibrary();
     if (!sys->hxdll)

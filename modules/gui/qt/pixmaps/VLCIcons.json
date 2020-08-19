@@ -144,6 +144,11 @@
 		{"key":"close", "path": "./close.svg"},
 		{"key":"ellipsis", "path": "./ellipsis.svg"},
 		{"key":"grid", "path": "./topbar/grid.svg"},
-		{"key":"list", "path": "./topbar/list.svg"}
+		{"key":"list", "path": "./topbar/list.svg"},
+		{"key":"album_cover", "path": "./album_cover.svg"},
+		{"key":"time", "path": "./time.svg"},
+		{"key":"play_outline", "path": "./play_outline.svg"},
+		{"key":"enqueue", "path": "./enqueue.svg"},
+		{"key":"back", "path": "./back.svg"}
 	]
 }

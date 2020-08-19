@@ -31,6 +31,7 @@
 #include <vlc_demux.h>
 #include <vlc_network.h>
 #include <vlc_plugin.h>
+#include <vlc_dtls.h>
 
 #include "rtp.h"
 #ifdef HAVE_SRTP
@@ -38,6 +39,7 @@
 # include <gcrypt.h>
 # include <vlc_gcrypt.h>
 #endif
+#include "sdp.h"
 
 /*
  * TODO: so much stuff
@@ -139,28 +141,198 @@ static void Close (vlc_object_t *obj)
     demux_t *demux = (demux_t *)obj;
     demux_sys_t *p_sys = demux->p_sys;
 
-    if (p_sys->thread_ready)
-    {
-        vlc_cancel (p_sys->thread);
-        vlc_join (p_sys->thread, NULL);
-    }
-
+    vlc_cancel(p_sys->thread);
+    vlc_join(p_sys->thread, NULL);
 #ifdef HAVE_SRTP
     if (p_sys->srtp)
         srtp_destroy (p_sys->srtp);
 #endif
-    if (p_sys->session)
-        rtp_session_destroy (demux, p_sys->session);
-    if (p_sys->rtcp_fd != -1)
-        net_Close (p_sys->rtcp_fd);
-    net_Close (p_sys->fd);
-    free (p_sys);
+    rtp_session_destroy (demux, p_sys->session);
+    if (p_sys->rtcp_sock != NULL)
+        vlc_dtls_Close(p_sys->rtcp_sock);
+    vlc_dtls_Close(p_sys->rtp_sock);
+}
+
+static int OpenSDP(vlc_object_t *obj)
+{
+    demux_t *demux = (demux_t *)obj;
+    uint64_t size;
+    const unsigned char *peek;
+
+    assert(demux->out != NULL);
+
+    if (vlc_stream_Peek(demux->s, &peek, 3) < 3 || memcmp(peek, "v=0", 3))
+        return VLC_EGENERIC; /* not an SDP */
+
+    if (vlc_stream_GetSize(demux->s, &size))
+        size = 65536;
+    else if (size > 65536) {
+        msg_Err(obj, "SDP description too large: %" PRIu64 " bytes", size);
+        return VLC_EGENERIC;
+    }
+
+    /* We must peek so that fallback to another plugin works. */
+    ssize_t sdplen = vlc_stream_Peek(demux->s, &peek, size);
+    if (sdplen < 0)
+        return sdplen;
+
+    demux_sys_t *sys = vlc_obj_malloc(obj, sizeof (*sys));
+    if (unlikely(sys == NULL))
+        return VLC_ENOMEM;
+
+    sys->rtp_sock = NULL;
+    sys->rtcp_sock = NULL;
+    sys->session = NULL;
+#ifdef HAVE_SRTP
+    sys->srtp = NULL;
+#endif
+
+    struct vlc_sdp *sdp = vlc_sdp_parse((const char *)peek, sdplen);
+    if (sdp == NULL) {
+        msg_Err(obj, "SDP description parse error");
+        return VLC_EGENERIC;
+    }
+
+    struct vlc_sdp_media *media = sdp->media;
+    if (media == NULL || media->next != NULL) {
+        msg_Dbg(obj, "only one SDP m= line supported");
+        goto error;
+    }
+
+    /* Check payload type (FIXME: handle multiple, match w/ a=rtpmap) */
+    unsigned char pt = atoi(media->format);
+    if (pt >= 64 || !(UINT64_C(0x300005d09) & (UINT64_C(1) << pt))) {
+        msg_Dbg(obj, "unsupported payload format(s) %s", media->format);
+        goto error;
+    }
+
+    if (vlc_sdp_media_attr_value(media, "control") != NULL
+     || vlc_sdp_attr_value(sdp, "control") != NULL) {
+        msg_Dbg(obj, "RTSP not supported");
+        goto error;
+    }
+
+    struct vlc_sdp_conn *conn = media->conns;
+    if (conn != NULL && conn->next != NULL) {
+        msg_Dbg(obj, "only one SDP c= line supported");
+        goto error;
+    }
+
+    if (conn == NULL)
+        conn = sdp->conn;
+    if (conn == NULL) {
+        msg_Err(obj, "missing SDP c= line");
+        goto error;
+    }
+
+    /* Determine destination port numbers */
+    unsigned int rtp_port, rtcp_port;
+
+    if (!vlc_sdp_media_attr_present(media, "rtcp-mux")) {
+        const char *rtcp = vlc_sdp_media_attr_value(media, "rtcp");
+
+        if (rtcp != NULL) {
+            /* Explicit RTCP port */
+            char *end;
+            unsigned long x = strtoul(rtcp, &end, 10);
+
+            if (*end || x == 0 || x > 65535) {
+                msg_Err(obj, "invalid RTCP port specification %s", rtcp);
+                goto error;
+            }
+
+            rtp_port = media->port;
+            rtcp_port = x;
+        } else {
+            /* Implicit RTCP port (next odd) */
+            rtp_port = (media->port + 1) & ~1;
+            rtcp_port = media->port | 1;
+        }
+    } else {
+        /* RTCP muxed on same port RTP */
+        rtp_port = media->port;
+        rtcp_port = 0;
+    }
+
+    /* TODO: support other protocols */
+    if (strcmp(media->proto, "RTP/AVP") != 0) {
+        msg_Dbg(obj, "unsupported protocol %s", media->proto);
+        goto error;
+    }
+
+    /* Determine source address */
+    char srcbuf[256], *src = NULL;
+    const char *sfilter = vlc_sdp_media_attr_value(media, "source-filter");
+    if (sfilter == NULL)
+        sfilter = vlc_sdp_attr_value(sdp, "source-filter");
+    /* FIXME: handle multiple source-filter attributes, match destination,
+     * check IP version */
+    if (sfilter != NULL
+     && sscanf(sfilter, " incl IN IP%*1[46] %*s %255s", srcbuf) == 1)
+        src = srcbuf;
+
+    /* FIXME: enforce address family */
+    int fd = net_OpenDgram(obj, conn->addr, rtp_port, src, 0, IPPROTO_UDP);
+    if (fd == -1)
+        goto error;
+
+    sys->rtp_sock = vlc_datagram_CreateFD(fd);
+    if (unlikely(sys->rtp_sock == NULL)) {
+        net_Close(fd);
+        goto error;
+    }
+
+    if (rtcp_port > 0) {
+        fd = net_OpenDgram(obj, conn->addr, rtcp_port, src, 0, IPPROTO_UDP);
+        if (fd == -1)
+            goto error;
+
+        sys->rtcp_sock = vlc_datagram_CreateFD(fd);
+        if (unlikely(sys->rtcp_sock == NULL)) {
+            net_Close(fd);
+            goto error;
+        }
+    }
+
+    vlc_sdp_free(sdp);
+    sdp = NULL;
+
+    sys->chained_demux = NULL;
+    sys->max_src = var_InheritInteger(obj, "rtp-max-src");
+    sys->timeout = vlc_tick_from_sec(var_InheritInteger(obj, "rtp-timeout"));
+    sys->max_dropout  = var_InheritInteger(obj, "rtp-max-dropout");
+    sys->max_misorder = var_InheritInteger(obj, "rtp-max-misorder");
+    sys->autodetect = true;
+
+    demux->pf_demux = NULL;
+    demux->pf_control = Control;
+    demux->p_sys = sys;
+
+    sys->session = rtp_session_create(demux);
+    if (sys->session == NULL)
+        goto error;
+
+    if (vlc_clone(&sys->thread, rtp_dgram_thread, demux,
+                  VLC_THREAD_PRIORITY_INPUT)) {
+        rtp_session_destroy(demux, sys->session);
+        goto error;
+    }
+    return VLC_SUCCESS;
+
+error:
+    if (sys->rtcp_sock != NULL)
+        vlc_dtls_Close(sys->rtcp_sock);
+    if (sys->rtp_sock != NULL)
+        vlc_dtls_Close(sys->rtp_sock);
+    if (sdp != NULL)
+        vlc_sdp_free(sdp);
+    return VLC_EGENERIC;
 }
 
 /**
  * Probes and initializes.
  */
-static int Open (vlc_object_t *obj)
+static int OpenURL(vlc_object_t *obj)
 {
     demux_t *demux = (demux_t *)obj;
     int tp; /* transport protocol */
@@ -171,9 +343,6 @@ static int Open (vlc_object_t *obj)
     if (!strcasecmp(demux->psz_name, "dccp"))
         tp = IPPROTO_DCCP;
     else
-    if (!strcasecmp(demux->psz_name, "rtptcp"))
-        tp = IPPROTO_TCP;
-    else
     if (!strcasecmp(demux->psz_name, "rtp"))
         tp = IPPROTO_UDP;
     else
@@ -181,6 +350,10 @@ static int Open (vlc_object_t *obj)
         tp = IPPROTO_UDPLITE;
     else
         return VLC_EGENERIC;
+
+    demux_sys_t *p_sys = vlc_obj_malloc(obj, sizeof (*p_sys));
+    if (unlikely(p_sys == NULL))
+        return VLC_ENOMEM;
 
     char *tmp = strdup (demux->psz_location);
     if (tmp == NULL)
@@ -212,6 +385,7 @@ static int Open (vlc_object_t *obj)
 
     /* Try to connect */
     int fd = -1, rtcp_fd = -1;
+    bool co = false;
 
     switch (tp)
     {
@@ -234,42 +408,38 @@ static int Open (vlc_object_t *obj)
             var_Create (obj, "dccp-service", VLC_VAR_STRING);
             var_SetString (obj, "dccp-service", "RTPV"); /* FIXME: RTPA? */
             fd = net_Connect (obj, dhost, dport, SOCK_DCCP, tp);
+            co = true;
 #else
             msg_Err (obj, "DCCP support not included");
 #endif
             break;
-
-        case IPPROTO_TCP:
-            fd = net_Connect (obj, dhost, dport, SOCK_STREAM, tp);
-            break;
     }
 
     free (tmp);
-    if (fd == -1)
-        return VLC_EGENERIC;
-    net_SetCSCov (fd, -1, 12);
-
-    /* Initializes demux */
-    demux_sys_t *p_sys = malloc (sizeof (*p_sys));
-    if (p_sys == NULL)
-    {
-        net_Close (fd);
+    p_sys->rtp_sock = (co ? vlc_dccp_CreateFD : vlc_datagram_CreateFD)(fd);
+    if (p_sys->rtcp_sock == NULL) {
         if (rtcp_fd != -1)
-            net_Close (rtcp_fd);
+            net_Close(rtcp_fd);
         return VLC_EGENERIC;
     }
+    net_SetCSCov (fd, -1, 12);
 
+    if (rtcp_fd != -1) {
+        p_sys->rtcp_sock = vlc_datagram_CreateFD(rtcp_fd);
+        if (p_sys->rtcp_sock == NULL)
+            net_Close (rtcp_fd);
+    } else
+        p_sys->rtcp_sock = NULL;
+
+    /* Initializes demux */
     p_sys->chained_demux = NULL;
 #ifdef HAVE_SRTP
     p_sys->srtp         = NULL;
 #endif
-    p_sys->fd           = fd;
-    p_sys->rtcp_fd      = rtcp_fd;
     p_sys->max_src      = var_CreateGetInteger (obj, "rtp-max-src");
     p_sys->timeout      = vlc_tick_from_sec( var_CreateGetInteger (obj, "rtp-timeout") );
     p_sys->max_dropout  = var_CreateGetInteger (obj, "rtp-max-dropout");
     p_sys->max_misorder = var_CreateGetInteger (obj, "rtp-max-misorder");
-    p_sys->thread_ready = false;
     p_sys->autodetect   = true;
 
     demux->pf_demux   = NULL;
@@ -306,15 +476,21 @@ static int Open (vlc_object_t *obj)
     }
 #endif
 
-    if (vlc_clone (&p_sys->thread,
-                   (tp != IPPROTO_TCP) ? rtp_dgram_thread : rtp_stream_thread,
+    if (vlc_clone (&p_sys->thread, rtp_dgram_thread,
                    demux, VLC_THREAD_PRIORITY_INPUT))
         goto error;
-    p_sys->thread_ready = true;
     return VLC_SUCCESS;
 
 error:
-    Close (obj);
+#ifdef HAVE_SRTP
+    if (p_sys->srtp != NULL)
+        srtp_destroy(p_sys->srtp);
+#endif
+    if (p_sys->session != NULL)
+        rtp_session_destroy(demux, p_sys->session);
+    if (p_sys->rtcp_sock != NULL)
+        vlc_dtls_Close(p_sys->rtcp_sock);
+    vlc_dtls_Close(p_sys->rtp_sock);
     return VLC_EGENERIC;
 }
 
@@ -370,8 +546,12 @@ vlc_module_begin()
     set_description(N_("Real-Time Protocol (RTP) input"))
     set_category(CAT_INPUT)
     set_subcategory(SUBCAT_INPUT_DEMUX)
+    set_capability("demux", 55)
+    set_callbacks(OpenSDP, Close)
+
+    add_submodule()
     set_capability("access", 0)
-    set_callbacks(Open, Close)
+    set_callbacks(OpenURL, Close)
 
     add_integer("rtcp-port", 0, RTCP_PORT_TEXT,
                  RTCP_PORT_LONGTEXT, false)
@@ -401,6 +581,5 @@ vlc_module_begin()
         change_string_list(dynamic_pt_list, dynamic_pt_list_text)
 
     /*add_shortcut ("sctp")*/
-    add_shortcut("dccp", "rtptcp", /* "tcp" is already taken :( */
-                 "rtp", "udplite")
+    add_shortcut("dccp", "rtp", "udplite")
 vlc_module_end()

@@ -28,15 +28,32 @@ import "qrc:///style/"
 Widgets.KeyNavigableTableView {
     id: root
 
-    sortModel: [
-        { isPrimary: true, criteria: "title",       width:0.44, text: i18n.qtr("Title"),    showSection: "title" },
-        { criteria: "album_title", width:0.25, text: i18n.qtr("Album"),    showSection: "album_title" },
-        { criteria: "main_artist", width:0.15, text: i18n.qtr("Artist"),   showSection: "main_artist" },
-        { criteria: "duration",    width:0.06, text: i18n.qtr("Duration"), showSection: "" },
-        { criteria: "track_number",width:0.05, text: i18n.qtr("Track"), showSection: "" },
-        { criteria: "disc_number", width:0.05, text: i18n.qtr("Disc"),  showSection: "" },
+    property var sortModelSmall: [
+        { isPrimary: true, criteria: "title",       width: VLCStyle.colWidth(1), text: i18n.qtr("Title"),    showSection: "title", colDelegate: tableColumns.titleDelegate, headerDelegate: tableColumns.titleHeaderDelegate },
+        { criteria: "album_title", width: VLCStyle.colWidth(1), text: i18n.qtr("Album"),    showSection: "album_title" },
+        { criteria: "main_artist", width: VLCStyle.colWidth(1), text: i18n.qtr("Artist"),   showSection: "main_artist" },
+        { criteria: "durationShort", width: VLCStyle.colWidth(1), showSection: "", colDelegate: tableColumns.timeColDelegate, headerDelegate: tableColumns.timeHeaderDelegate },
     ]
 
+    property var sortModelMedium: [
+        { isPrimary: true, criteria: "title",       width: VLCStyle.colWidth(2), text: i18n.qtr("Title"),    showSection: "title", colDelegate: tableColumns.titleDelegate, headerDelegate: tableColumns.titleHeaderDelegate },
+        { criteria: "album_title", width: VLCStyle.colWidth(2), text: i18n.qtr("Album"),    showSection: "album_title" },
+        { criteria: "main_artist", width: VLCStyle.colWidth(1), text: i18n.qtr("Artist"),   showSection: "main_artist" },
+        { criteria: "durationShort", width: VLCStyle.colWidth(1), showSection: "", colDelegate: tableColumns.timeColDelegate, headerDelegate: tableColumns.timeHeaderDelegate },
+    ]
+
+    property var sortModelLarge: [
+        { isPrimary: true, criteria: "title",       width: VLCStyle.colWidth(2), text: i18n.qtr("Title"),    showSection: "title", colDelegate: tableColumns.titleDelegate, headerDelegate: tableColumns.titleHeaderDelegate },
+        { criteria: "album_title", width: VLCStyle.colWidth(2), text: i18n.qtr("Album"),    showSection: "album_title" },
+        { criteria: "main_artist", width: VLCStyle.colWidth(2), text: i18n.qtr("Artist"),   showSection: "main_artist" },
+        { criteria: "durationShort", width: VLCStyle.colWidth(1), showSection: "", colDelegate: tableColumns.timeColDelegate, headerDelegate: tableColumns.timeHeaderDelegate },
+        { criteria: "track_number",width: VLCStyle.colWidth(1), text: i18n.qtr("Track"), showSection: "" },
+        { criteria: "disc_number", width: VLCStyle.colWidth(1), text: i18n.qtr("Disc"),  showSection: "" },
+    ]
+
+    sortModel: ( availableRowWidth < VLCStyle.colWidth(6) ) ? sortModelSmall
+                                                            : ( availableRowWidth < VLCStyle.colWidth(9) )
+                                                              ? sortModelMedium : sortModelLarge
     section.property: "title_first_symbol"
 
     headerColor: VLCStyle.colors.bg
@@ -59,35 +76,9 @@ Widgets.KeyNavigableTableView {
 
     property alias parentId: rootmodel.parentId
 
-    colDelegate: Item {
-        anchors.fill: parent
+    onActionForSelection:  medialib.addAndPlay(model.getIdsForIndexes( selection ))
 
-        property var rowModel: parent.rowModel
-        property var model: parent.colModel
-
-        Text {
-            anchors.fill:parent
-
-            text: !rowModel ? "" : (rowModel[model.criteria] || "")
-            elide: Text.ElideRight
-            font.pixelSize: VLCStyle.fontSize_normal
-            color: (model.isPrimary)? VLCStyle.colors.text : VLCStyle.colors.textDisabled
-
-            anchors {
-                fill: parent
-                leftMargin: VLCStyle.margin_xsmall
-                rightMargin: VLCStyle.margin_xsmall
-            }
-            verticalAlignment: Text.AlignVCenter
-            horizontalAlignment: Text.AlignLeft
-        }
-    }
-
-    onActionForSelection: {
-        var list = []
-        for (var i = 0; i < selection.count; i++ ) {
-            list.push(selection.get(i).model.id)
-        }
-        medialib.addAndPlay(list)
+    Widgets.TableColumns {
+        id: tableColumns
     }
 }

@@ -179,6 +179,15 @@ void PlaylistListModelPrivate::onItemsReset(const QVector<PlaylistItem>& newCont
     m_items = newContent;
     q->endResetModel();
 
+    m_duration = VLC_TICK_FROM_SEC(0);
+    if (m_items.size())
+    {
+        for(const auto& i : m_items)
+        {
+            m_duration += i.getDuration();
+        }
+    }
+
     emit q->countChanged(m_items.size());
     emit q->selectedCountChanged();
 }
@@ -191,6 +200,11 @@ void PlaylistListModelPrivate::onItemsAdded(const QVector<PlaylistItem>& added, 
     m_items.insert(index, count, nullptr);
     std::move(added.cbegin(), added.cend(), m_items.begin() + index);
     q->endInsertRows();
+
+    for(const auto& i : added)
+    {
+        m_duration += i.getDuration();
+    }
 
     emit q->countChanged(m_items.size());
 }
@@ -220,6 +234,12 @@ void PlaylistListModelPrivate::onItemsMoved(size_t index, size_t count, size_t t
 void PlaylistListModelPrivate::onItemsRemoved(size_t index, size_t count)
 {
     Q_Q(PlaylistListModel);
+
+    for(size_t i = index; i < count; ++i)
+    {
+        m_duration -= m_items.at(i).getDuration();
+    }
+
     q->beginRemoveRows({}, index, index + count - 1);
     m_items.remove(index, count);
     q->endRemoveRows();
@@ -298,7 +318,14 @@ PlaylistListModel::rowCount(const QModelIndex &parent) const
     return d->m_items.size();
 }
 
-const PlaylistItem &
+VLCTick
+PlaylistListModel::getDuration() const
+{
+    Q_D(const PlaylistListModel);
+    return VLCTick(d->m_duration);
+}
+
+PlaylistItem
 PlaylistListModel::itemAt(int index) const
 {
     Q_D(const PlaylistListModel);

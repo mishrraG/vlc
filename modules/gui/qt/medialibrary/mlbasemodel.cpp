@@ -55,6 +55,16 @@ void MLBaseModel::sortByColumn(QByteArray name, Qt::SortOrder order)
     endResetModel();
 }
 
+QMap<QString, QVariant> MLBaseModel::getDataAt(int idx)
+{
+    QMap<QString, QVariant> dataDict;
+    QHash<int,QByteArray> roles = roleNames();
+    for (auto role: roles.keys()) {
+        dataDict[roles[role]] = data(index(idx), role);
+    }
+    return dataDict;
+}
+
 void MLBaseModel::onResetRequested()
 {
     beginResetModel();
@@ -80,6 +90,14 @@ void MLBaseModel::onVlcMlEvent(const vlc_ml_event_t* event)
             }
             break;
     }
+}
+
+QString MLBaseModel::getFirstSymbol(QString str)
+{
+    QString ret("#");
+    if ( str.length() > 0 && str[0].isLetter() )
+        ret = str[0].toUpper();
+    return ret;
 }
 
 void MLBaseModel::onVlcMlEvent(void* data, const vlc_ml_event_t* event)

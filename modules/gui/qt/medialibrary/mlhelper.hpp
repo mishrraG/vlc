@@ -26,6 +26,7 @@
 #endif
 
 #include "vlc_media_library.h"
+#include <QString>
 
 template<typename T>
 class MLDeleter
@@ -70,5 +71,6 @@ MLListRange<T> ml_range_iterate(L& list)
     return MLListRange<T>{ list->p_items, list->p_items + list->i_nb_items };
 }
 
+QString MsToString( int64_t time, bool doShort = false );
 
 #endif // MLHELPER_HPP

@@ -29,6 +29,7 @@
 #include <vlc_dialog.h>
 #include "medialibrary.h"
 #include "fs/fs.h"
+#include "fs/devicelister.h"
 
 #include <medialibrary/IMedia.h>
 #include <medialibrary/IAlbumTrack.h>
@@ -38,6 +39,7 @@
 #include <medialibrary/IMetadata.h>
 #include <medialibrary/IShow.h>
 #include <medialibrary/IPlaylist.h>
+#include <medialibrary/IBookmark.h>
 
 #include <sstream>
 #include <initializer_list>
@@ -81,6 +83,7 @@ void assignToEvent( vlc_ml_event_t* ev, vlc_ml_artist_t* a )   { ev->creation.p_
 void assignToEvent( vlc_ml_event_t* ev, vlc_ml_album_t* a )    { ev->creation.p_album    = a; }
 void assignToEvent( vlc_ml_event_t* ev, vlc_ml_genre_t* g )    { ev->creation.p_genre    = g; }
 void assignToEvent( vlc_ml_event_t* ev, vlc_ml_playlist_t* p ) { ev->creation.p_playlist = p; }
+void assignToEvent( vlc_ml_event_t* ev, vlc_ml_bookmark_t* b ) { ev->creation.p_bookmark = b; }
 
 template <typename To, typename From>
 void wrapEntityCreatedEventCallback( vlc_medialibrary_module_t* ml,
@@ -103,7 +106,7 @@ void wrapEntityCreatedEventCallback( vlc_medialibrary_module_t* ml,
 }
 
 void wrapEntityModifiedEventCallback( vlc_medialibrary_module_t* ml,
-                                      const std::vector<int64_t>& ids,
+                                      const std::set<int64_t>& ids,
                                       vlc_ml_event_type evType )
 {
     vlc_ml_event_t ev;
@@ -116,7 +119,7 @@ void wrapEntityModifiedEventCallback( vlc_medialibrary_module_t* ml,
 }
 
 void wrapEntityDeletedEventCallback( vlc_medialibrary_module_t* ml,
-                                     const std::vector<int64_t>& ids, vlc_ml_event_type evType )
+                                     const std::set<int64_t>& ids, vlc_ml_event_type evType )
 {
     vlc_ml_event_t ev;
     ev.i_type = evType;
@@ -134,12 +137,12 @@ void MediaLibrary::onMediaAdded( std::vector<medialibrary::MediaPtr> media )
     wrapEntityCreatedEventCallback<vlc_ml_media_t>( m_vlc_ml, media, VLC_ML_EVENT_MEDIA_ADDED );
 }
 
-void MediaLibrary::onMediaModified( std::vector<int64_t> mediaIds )
+void MediaLibrary::onMediaModified( std::set<int64_t> mediaIds )
 {
     wrapEntityModifiedEventCallback( m_vlc_ml, mediaIds, VLC_ML_EVENT_MEDIA_UPDATED );
 }
 
-void MediaLibrary::onMediaDeleted( std::vector<int64_t> mediaIds )
+void MediaLibrary::onMediaDeleted( std::set<int64_t> mediaIds )
 {
     wrapEntityDeletedEventCallback( m_vlc_ml, mediaIds, VLC_ML_EVENT_MEDIA_DELETED );
 }
@@ -149,12 +152,12 @@ void MediaLibrary::onArtistsAdded( std::vector<medialibrary::ArtistPtr> artists 
     wrapEntityCreatedEventCallback<vlc_ml_artist_t>( m_vlc_ml, artists, VLC_ML_EVENT_ARTIST_ADDED );
 }
 
-void MediaLibrary::onArtistsModified( std::vector<int64_t> artistIds )
+void MediaLibrary::onArtistsModified( std::set<int64_t> artistIds )
 {
     wrapEntityModifiedEventCallback( m_vlc_ml, artistIds, VLC_ML_EVENT_ARTIST_UPDATED );
 }
 
-void MediaLibrary::onArtistsDeleted( std::vector<int64_t> artistIds )
+void MediaLibrary::onArtistsDeleted( std::set<int64_t> artistIds )
 {
     wrapEntityDeletedEventCallback( m_vlc_ml, artistIds, VLC_ML_EVENT_ARTIST_DELETED );
 }
@@ -164,12 +167,12 @@ void MediaLibrary::onAlbumsAdded( std::vector<medialibrary::AlbumPtr> albums )
     wrapEntityCreatedEventCallback<vlc_ml_album_t>( m_vlc_ml, albums, VLC_ML_EVENT_ALBUM_ADDED );
 }
 
-void MediaLibrary::onAlbumsModified( std::vector<int64_t> albumIds )
+void MediaLibrary::onAlbumsModified( std::set<int64_t> albumIds )
 {
     wrapEntityModifiedEventCallback( m_vlc_ml, albumIds, VLC_ML_EVENT_ALBUM_UPDATED );
 }
 
-void MediaLibrary::onAlbumsDeleted( std::vector<int64_t> albumIds )
+void MediaLibrary::onAlbumsDeleted( std::set<int64_t> albumIds )
 {
     wrapEntityDeletedEventCallback( m_vlc_ml, albumIds, VLC_ML_EVENT_ALBUM_DELETED );
 }
@@ -179,12 +182,12 @@ void MediaLibrary::onPlaylistsAdded( std::vector<medialibrary::PlaylistPtr> play
     wrapEntityCreatedEventCallback<vlc_ml_playlist_t>( m_vlc_ml, playlists, VLC_ML_EVENT_PLAYLIST_ADDED );
 }
 
-void MediaLibrary::onPlaylistsModified( std::vector<int64_t> playlistIds )
+void MediaLibrary::onPlaylistsModified( std::set<int64_t> playlistIds )
 {
     wrapEntityModifiedEventCallback( m_vlc_ml, playlistIds, VLC_ML_EVENT_PLAYLIST_UPDATED );
 }
 
-void MediaLibrary::onPlaylistsDeleted( std::vector<int64_t> playlistIds )
+void MediaLibrary::onPlaylistsDeleted( std::set<int64_t> playlistIds )
 {
     wrapEntityDeletedEventCallback( m_vlc_ml, playlistIds, VLC_ML_EVENT_PLAYLIST_DELETED );
 }
@@ -194,26 +197,44 @@ void MediaLibrary::onGenresAdded( std::vector<medialibrary::GenrePtr> genres )
     wrapEntityCreatedEventCallback<vlc_ml_genre_t>( m_vlc_ml, genres, VLC_ML_EVENT_GENRE_ADDED );
 }
 
-void MediaLibrary::onGenresModified( std::vector<int64_t> genreIds )
+void MediaLibrary::onGenresModified( std::set<int64_t> genreIds )
 {
     wrapEntityModifiedEventCallback( m_vlc_ml, genreIds, VLC_ML_EVENT_GENRE_UPDATED );
 }
 
-void MediaLibrary::onGenresDeleted( std::vector<int64_t> genreIds )
+void MediaLibrary::onGenresDeleted( std::set<int64_t> genreIds )
 {
     wrapEntityDeletedEventCallback( m_vlc_ml, genreIds, VLC_ML_EVENT_GENRE_DELETED );
 }
 
-void MediaLibrary::onMediaGroupAdded( std::vector<medialibrary::MediaGroupPtr> )
+void MediaLibrary::onMediaGroupsAdded( std::vector<medialibrary::MediaGroupPtr> )
 {
 }
 
-void MediaLibrary::onMediaGroupModified( std::vector<int64_t> )
+void MediaLibrary::onMediaGroupsModified( std::set<int64_t> )
 {
 }
 
-void MediaLibrary::onMediaGroupDeleted( std::vector<int64_t> )
+void MediaLibrary::onMediaGroupsDeleted( std::set<int64_t> )
 {
+}
+
+void MediaLibrary::onBookmarksAdded( std::vector<medialibrary::BookmarkPtr> bookmarks )
+{
+    wrapEntityCreatedEventCallback<vlc_ml_bookmark_t>( m_vlc_ml, bookmarks,
+                                                       VLC_ML_EVENT_BOOKMARKS_ADDED );
+}
+
+void MediaLibrary::onBookmarksModified( std::set<int64_t> bookmarkIds )
+{
+    wrapEntityModifiedEventCallback( m_vlc_ml, bookmarkIds,
+                                     VLC_ML_EVENT_BOOKMARKS_UPDATED );
+}
+
+void MediaLibrary::onBookmarksDeleted( std::set<int64_t> bookmarkIds )
+{
+    wrapEntityDeletedEventCallback( m_vlc_ml, bookmarkIds,
+                                    VLC_ML_EVENT_BOOKMARKS_DELETED );
 }
 
 void MediaLibrary::onDiscoveryStarted( const std::string& entryPoint )
@@ -372,6 +393,12 @@ bool MediaLibrary::Init()
     auto userDir = vlc::wrap_cptr( config_GetUserDir( VLC_USERDATA_DIR ) );
     std::string mlDir = std::string{ userDir.get() } + "/ml/";
 
+    m_ml->registerDeviceLister( std::make_shared<vlc::medialibrary::DeviceLister>(
+                                    VLC_OBJECT(m_vlc_ml) ), "smb://" );
+    m_ml->addFileSystemFactory( std::make_shared<vlc::medialibrary::SDFileSystemFactory>(
+                                    VLC_OBJECT( m_vlc_ml ), m_ml.get(), "file://") );
+    m_ml->addFileSystemFactory( std::make_shared<vlc::medialibrary::SDFileSystemFactory>(
+                                    VLC_OBJECT( m_vlc_ml ), m_ml.get(), "smb://") );
     auto initStatus = m_ml->initialize( mlDir + "ml.db", mlDir + "/mlstorage/", this );
     switch ( initStatus )
     {
@@ -421,8 +448,6 @@ bool MediaLibrary::Init()
         return false;
     }
 
-    auto networkFs = std::make_shared<vlc::medialibrary::SDFileSystemFactory>( VLC_OBJECT( m_vlc_ml ), "smb://");
-    m_ml->addNetworkFileSystemFactory( networkFs );
     m_ml->setDiscoverNetworkEnabled( true );
 
     return true;
@@ -433,22 +458,13 @@ bool MediaLibrary::Start()
     if ( Init() == false )
         return false;
 
-    auto startRes = m_ml->start();
-    switch ( startRes )
-    {
-        case medialibrary::StartResult::Failed:
-            msg_Err( m_vlc_ml, "Failed to start the MediaLibrary" );
-            return false;
-        case medialibrary::StartResult::AlreadyStarted:
-            return true;
-        case medialibrary::StartResult::Success:
-            break;
-    }
-
-    // Reload entry points we already know about, and then add potential new ones.
-    // Doing it the other way around would cause the initial scan to be performed
-    // twice, as we start discovering the new folders, then reload them.
-    m_ml->reload();
+    /*
+     * If we already provided the medialib with some entry points, then we have
+     * nothing left to do
+     */
+    auto entryPoints = m_ml->entryPoints()->all();
+    if ( entryPoints.empty() == false )
+        return true;
 
     auto folders = vlc::wrap_cptr( var_InheritString( m_vlc_ml, "ml-folders" ) );
     if ( folders != nullptr && strlen( folders.get() ) > 0 )
@@ -583,6 +599,10 @@ int MediaLibrary::Control( int query, va_list args )
         case VLC_ML_MEDIA_GENERATE_THUMBNAIL:
         case VLC_ML_MEDIA_ADD_EXTERNAL_MRL:
         case VLC_ML_MEDIA_SET_TYPE:
+        case VLC_ML_MEDIA_ADD_BOOKMARK:
+        case VLC_ML_MEDIA_REMOVE_BOOKMARK:
+        case VLC_ML_MEDIA_REMOVE_ALL_BOOKMARKS:
+        case VLC_ML_MEDIA_UPDATE_BOOKMARK:
             return controlMedia( query, args );
         default:
             return VLC_EGENERIC;
@@ -784,27 +804,9 @@ int MediaLibrary::List( int listQuery, const vlc_ml_query_params_t* params, va_l
 
         case VLC_ML_LIST_MEDIA_LABELS:
         case VLC_ML_COUNT_MEDIA_LABELS:
-        {
-            auto media = m_ml->media( va_arg( args, int64_t ) );
-            if ( media == nullptr )
-                return VLC_EGENERIC;
-            auto query = media->labels();
-            if ( query == nullptr )
-                return VLC_EGENERIC;
-            switch ( listQuery )
-            {
-                case VLC_ML_LIST_MEDIA_LABELS:
-                    *va_arg( args, vlc_ml_label_list_t**) =
-                            ml_convert_list<vlc_ml_label_list_t, vlc_ml_label_t>(
-                                query->items( nbItems, offset ) );
-                    return VLC_SUCCESS;
-                case VLC_ML_COUNT_MEDIA_LABELS:
-                    *va_arg( args, size_t* ) = query->count();
-                    return VLC_SUCCESS;
-                default:
-                    vlc_assert_unreachable();
-            }
-        }
+        case VLC_ML_LIST_MEDIA_BOOKMARKS:
+            return listMedia( listQuery, paramsPtr, psz_pattern, nbItems, offset, args );
+
         case VLC_ML_LIST_SHOWS:
         {
             medialibrary::Query<medialibrary::IShow> query;
@@ -1240,6 +1242,43 @@ int MediaLibrary::controlMedia( int query, va_list args )
                 return VLC_EGENERIC;
             return VLC_SUCCESS;
         }
+        case VLC_ML_MEDIA_ADD_BOOKMARK:
+        {
+            auto time = va_arg( args, int64_t );
+            if ( m->addBookmark( time ) == nullptr )
+                return VLC_EGENERIC;
+            return VLC_EGENERIC;
+        }
+        case VLC_ML_MEDIA_REMOVE_BOOKMARK:
+        {
+            auto time = va_arg( args, int64_t );
+            if ( m->removeBookmark( time ) == false )
+                return VLC_EGENERIC;
+            return VLC_SUCCESS;
+        }
+        case VLC_ML_MEDIA_REMOVE_ALL_BOOKMARKS:
+        {
+            if ( m->removeAllBookmarks() == false )
+                return VLC_EGENERIC;
+            return VLC_SUCCESS;
+        }
+        case VLC_ML_MEDIA_UPDATE_BOOKMARK:
+        {
+            auto time = va_arg( args, int64_t );
+            auto name = va_arg( args, const char* );
+            auto desc = va_arg( args, const char* );
+            auto bookmark = m->bookmark( time );
+            if ( bookmark == nullptr )
+                return VLC_EGENERIC;
+            auto res = false;
+            if ( name != nullptr && desc != nullptr )
+                res = bookmark->setNameAndDescription( name, desc );
+            else if ( name != nullptr )
+                res = bookmark->setName( name );
+            else if ( desc != nullptr )
+                res = bookmark->setDescription( desc );
+            return res ? VLC_SUCCESS : VLC_EGENERIC;
+        }
         default:
             vlc_assert_unreachable();
     }
@@ -1586,6 +1625,47 @@ int MediaLibrary::listPlaylist( int listQuery, const medialibrary::QueryParamete
                 default:
                     vlc_assert_unreachable();
             }
+        }
+        default:
+            vlc_assert_unreachable();
+    }
+}
+
+int MediaLibrary::listMedia( int listQuery, const medialibrary::QueryParameters *params,
+                             const char *, uint32_t nbItems, uint32_t offset,
+                             va_list args )
+{
+    auto media = m_ml->media( va_arg( args, int64_t ) );
+    if ( media == nullptr )
+        return VLC_EGENERIC;
+    switch ( listQuery )
+    {
+        case VLC_ML_LIST_MEDIA_LABELS:
+        case VLC_ML_COUNT_MEDIA_LABELS:
+        {
+            auto query = media->labels();
+            if ( query == nullptr )
+                return VLC_EGENERIC;
+            switch ( listQuery )
+            {
+                case VLC_ML_LIST_MEDIA_LABELS:
+                    *va_arg( args, vlc_ml_label_list_t**) =
+                            ml_convert_list<vlc_ml_label_list_t, vlc_ml_label_t>(
+                                query->items( nbItems, offset ) );
+                    return VLC_SUCCESS;
+                case VLC_ML_COUNT_MEDIA_LABELS:
+                    *va_arg( args, size_t* ) = query->count();
+                    return VLC_SUCCESS;
+                default:
+                    vlc_assert_unreachable();
+            }
+        }
+        case VLC_ML_LIST_MEDIA_BOOKMARKS:
+        {
+            *va_arg( args, vlc_ml_bookmark_list_t** ) =
+                    ml_convert_list<vlc_ml_bookmark_list_t, vlc_ml_bookmark_t>(
+                        media->bookmarks( params )->all() );
+            return VLC_SUCCESS;
         }
         default:
             vlc_assert_unreachable();

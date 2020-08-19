@@ -24,10 +24,17 @@ import "qrc:///style/"
 
 Widgets.GridItem {
     property var model: ({})
+    property int index: -1
+
     image: model.cover || VLCStyle.noArtAlbum
     title: model.title || i18n.qtr("Unknown title")
     subtitle: model.main_artist || i18n.qtr("Unknown artist")
-    isVideo: false
-    pictureWidth: VLCStyle.cover_normal
-    pictureHeight: VLCStyle.cover_normal
+    pictureWidth: VLCStyle.gridCover_music_width
+    pictureHeight: VLCStyle.gridCover_music_height
+    playCoverBorder.width: VLCStyle.gridCover_music_border
+    onPlayClicked: {
+        if ( model.id !== undefined ) {
+            medialib.addAndPlay( model.id )
+        }
+    }
 }

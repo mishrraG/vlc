@@ -33,6 +33,8 @@
 #include "../../adaptive/playlist/SegmentList.h"
 
 #include <ctime>
+#include <limits>
+#include <cassert>
 
 using namespace hls;
 using namespace hls::playlist;
@@ -43,7 +45,7 @@ Representation::Representation  ( BaseAdaptationSet *set ) :
     b_live = true;
     b_loaded = false;
     b_failed = false;
-    nextUpdateTime = 0;
+    lastUpdateTime = 0;
     targetDuration = 0;
     streamFormat = StreamFormat::UNKNOWN;
 }
@@ -99,59 +101,63 @@ void Representation::debug(vlc_object_t *obj, int indent) const
     }
 }
 
-void Representation::scheduleNextUpdate(uint64_t number)
+void Representation::scheduleNextUpdate(uint64_t, bool b_updated)
 {
+    if(!isLive())
+        return;
+
+    if(!b_updated)
+    {
+        /* Ensure we don't update-loop if it failed */
+        //lastUpdateTime = vlc_tick_now();
+        return;
+    }
+
+    const vlc_tick_t now = vlc_tick_now();
     const AbstractPlaylist *playlist = getPlaylist();
-    const time_t now = time(NULL);
 
-    /* Compute new update time */
-    vlc_tick_t minbuffer = getMinAheadTime(number);
+    msg_Dbg(playlist->getVLCObject(), "Updated playlist ID %s, after %" PRId64 "s",
+            getID().str().c_str(),
+            lastUpdateTime ? SEC_FROM_VLC_TICK(now - lastUpdateTime) : 0);
 
-    /* Update frequency must always be at least targetDuration (if any)
-     * but we need to update before reaching that last segment, thus -1 */
-    if(targetDuration)
-    {
-        if(minbuffer > vlc_tick_from_sec( 2 * targetDuration + 1 ))
-            minbuffer -= vlc_tick_from_sec( targetDuration + 1 );
-        else
-            minbuffer = vlc_tick_from_sec( targetDuration - 1 );
-    }
-    else
-    {
-        if(minbuffer < VLC_TICK_FROM_SEC(10))
-            minbuffer = VLC_TICK_FROM_SEC(4);
-        else
-            minbuffer /= 2;
-    }
-
-    nextUpdateTime = now + SEC_FROM_VLC_TICK(minbuffer);
-
-    msg_Dbg(playlist->getVLCObject(), "Updated playlist ID %s, next update in %" PRId64 "s",
-            getID().str().c_str(), (int64_t) nextUpdateTime - now);
+    lastUpdateTime = now;
 
     debug(playlist->getVLCObject(), 0);
 }
 
-bool Representation::needsUpdate() const
+bool Representation::needsUpdate(uint64_t number) const
 {
-    return !b_failed && (!b_loaded || (isLive() && nextUpdateTime < time(NULL)));
+    if(b_failed)
+        return false;
+    if(!b_loaded)
+        return true;
+    if(isLive())
+    {
+        const vlc_tick_t now = vlc_tick_now();
+        const vlc_tick_t elapsed = now - lastUpdateTime;
+        const vlc_tick_t duration = targetDuration
+                                  ? vlc_tick_from_sec(targetDuration)
+                                  : VLC_TICK_FROM_SEC(2);
+        if(elapsed < duration)
+            return false;
+
+        if(number != std::numeric_limits<uint64_t>::max())
+        {
+            vlc_tick_t minbuffer = getMinAheadTime(number);
+            return ( minbuffer < duration );
+        }
+    }
+    return false;
 }
 
 bool Representation::runLocalUpdates(SharedResources *res)
 {
-    const time_t now = time(NULL);
     AbstractPlaylist *playlist = getPlaylist();
-    if(!b_loaded || (isLive() && nextUpdateTime < now))
-    {
-        M3U8Parser parser(res);
-        if(!parser.appendSegmentsFromPlaylistURI(playlist->getVLCObject(), this))
-            b_failed = true;
-        else
-            b_loaded = true;
-
-        return true;
-    }
-
+    M3U8Parser parser(res);
+    if(!parser.appendSegmentsFromPlaylistURI(playlist->getVLCObject(), this))
+        b_failed = true;
+    else
+        b_loaded = true;
     return true;
 }
 
@@ -163,7 +169,8 @@ uint64_t Representation::translateSegmentNumber(uint64_t num, const SegmentInfor
     HLSSegment *fromHlsSeg = dynamic_cast<HLSSegment *>(fromSeg);
     if(!fromHlsSeg)
         return 1;
-    const vlc_tick_t utcTime = fromHlsSeg->getUTCTime();
+    const vlc_tick_t utcTime = fromHlsSeg->getUTCTime() +
+                               getTimescale().ToTime(fromHlsSeg->duration.Get()) / 2;
 
     std::vector<ISegment *> list;
     std::vector<ISegment *>::const_iterator it;

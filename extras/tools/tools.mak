@@ -92,7 +92,7 @@ cmake-$(CMAKE_VERSION).tar.gz:
 
 cmake: cmake-$(CMAKE_VERSION).tar.gz
 	$(UNPACK)
-	$(APPLY) $(TOOLS)/cmake-msys-FindPkg.patch
+	$(APPLY) $(TOOLS)/cmake-enable-ALPN-support-on-macOS-10.14.patch
 	$(MOVE)
 
 .buildcmake: cmake
@@ -243,7 +243,7 @@ pkgconfig: pkg-config-$(PKGCFG_VERSION).tar.gz
 	$(MOVE)
 
 .buildpkg-config: pkgconfig
-	(cd pkgconfig; ./configure --prefix=$(PREFIX) --disable-shared --enable-static && $(MAKE) && $(MAKE) install)
+	(cd pkgconfig; ./configure --prefix=$(PREFIX) --disable-shared --enable-static --disable-dependency-tracking && $(MAKE) && $(MAKE) install)
 	touch $@
 
 CLEAN_FILE += .buildpkg-config
@@ -278,7 +278,7 @@ ragel: ragel-$(RAGEL_VERSION).tar.gz
 
 
 .buildragel: ragel
-	(cd ragel; ./configure --prefix=$(PREFIX) --disable-shared --enable-static && $(MAKE) && $(MAKE) install)
+	(cd ragel; ./configure --prefix=$(PREFIX) --disable-shared --enable-static --disable-dependency-tracking && $(MAKE) && $(MAKE) install)
 	touch $@
 
 CLEAN_FILE += .buildragel
@@ -331,7 +331,7 @@ protobuf: protobuf-$(PROTOBUF_VERSION).tar.gz
 	$(MOVE)
 
 .buildprotoc: protobuf
-	(cd $< && ./configure --prefix="$(PREFIX)" --disable-shared --enable-static && $(MAKE) && $(MAKE) install)
+	(cd $< && ./configure --prefix="$(PREFIX)" --disable-shared --enable-static --disable-dependency-tracking && $(MAKE) && $(MAKE) install)
 	(find $(PREFIX) -name 'protobuf*.pc' -exec rm -f {} \;)
 	touch $@
 

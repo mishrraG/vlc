@@ -45,11 +45,6 @@
 #include "../libs.h"
 #include "../extension.h"
 
-vlc_player_t *vlclua_get_player_internal(lua_State *L) {
-    vlc_playlist_t *playlist = vlclua_get_playlist_internal(L);
-    return vlc_playlist_GetPlayer(playlist);
-}
-
 vout_thread_t *vlclua_get_vout_internal(lua_State *L)
 {
     vlc_player_t *player = vlclua_get_player_internal(L);
@@ -622,6 +617,7 @@ static int vlclua_input_item_stats( lua_State *L )
         STATS_INT( decoded_audio )
         STATS_INT( decoded_video )
         STATS_INT( displayed_pictures )
+        STATS_INT( late_pictures )
         STATS_INT( lost_pictures )
         STATS_INT( played_abuffers )
         STATS_INT( lost_abuffers )

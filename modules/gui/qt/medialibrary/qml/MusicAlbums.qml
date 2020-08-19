@@ -36,12 +36,13 @@ Widgets.NavigableFocusScope {
         { text: i18n.qtr("Artist"),      criteria: "main_artist" },
     ]
 
-    property alias model: delegateModelId.model
-    property alias parentId: delegateModelId.parentId
+    property alias model: albumModelId
+    property alias parentId: albumModelId.parentId
     readonly property var currentIndex: view.currentItem.currentIndex
     //the index to "go to" when the view is loaded
     property var initialIndex: 0
-
+    property int gridViewMarginTop: VLCStyle.margin_large
+    property var gridViewRowX: medialib.gridView ? view.currentItem.rowX : undefined
 
     navigationCancel: function() {
         if (view.currentItem.currentIndex <= 0) {
@@ -60,71 +61,38 @@ Widgets.NavigableFocusScope {
     onParentIdChanged: resetFocus()
 
     function resetFocus() {
-        if (delegateModelId.items.count === 0) {
+        if (albumModelId.count === 0) {
             return
         }
         var initialIndex = root.initialIndex
-        if (initialIndex >= delegateModelId.items.count)
+        if (initialIndex >= albumModelId.count)
             initialIndex = 0
-        delegateModelId.selectNone()
-        delegateModelId.items.get(initialIndex).inSelected = true
-        view.currentItem.currentIndex = initialIndex
+        selectionModel.select(model.index(initialIndex, 0), ItemSelectionModel.ClearAndSelect)
         view.currentItem.positionViewAtIndex(initialIndex, ItemView.Contain)
     }
 
-    Util.SelectableDelegateModel {
-        id: delegateModelId
-        property alias parentId: albumModelId.parentId
-
-        model: MLAlbumModel {
-            id: albumModelId
-            ml: medialib
+    function _actionAtIndex(index) {
+        if (selectionModel.selectedGroup.count > 1) {
+            medialib.addAndPlay( model.getIdsForIndexes( selectionModel.selectedIndexes ) )
+        } else {
+            medialib.addAndPlay( model.getIdForIndex(index) )
         }
+    }
 
-
-        delegate: Package {
-            id: element
-
-            Widgets.ListItem {
-                Package.name: "list"
-                width: root.width
-                height: VLCStyle.icon_normal + VLCStyle.margin_small
-
-                cover: Image {
-                    id: cover_obj
-                    fillMode: Image.PreserveAspectFit
-                    source: model.cover || VLCStyle.noArtAlbum
-                    sourceSize: Qt.size(width, height)
-                }
-                line1: (model.title || i18n.qtr("Unknown title"))+" ["+model.duration+"]"
-                line2: model.main_artist || i18n.qtr("Unknown artist")
-
-                onItemClicked : {
-                    delegateModelId.updateSelection( modifier, view.currentItem.currentIndex, index )
-                    view.currentItem.currentIndex = index
-                    this.forceActiveFocus()
-                }
-                onPlayClicked: medialib.addAndPlay( model.id )
-                onAddToPlaylistClicked : medialib.addToPlaylist( model.id )
-            }
-        }
+    MLAlbumModel {
+        id: albumModelId
+        ml: medialib
 
         onCountChanged: {
-            if (delegateModelId.items.count > 0 && delegateModelId.selectedGroup.count === 0) {
+            if (albumModelId.count > 0 && !selectionModel.hasSelection) {
                 root.resetFocus()
             }
         }
+    }
 
-        function actionAtIndex(index) {
-            if (delegateModelId.selectedGroup.count > 1) {
-                var list = []
-                for (var i = 0; i < delegateModelId.selectedGroup.count; i++)
-                    list.push(delegateModelId.selectedGroup.get(i).model.id)
-                medialib.addAndPlay( list )
-            } else {
-                medialib.addAndPlay( delegateModelId.items.get(index).model.id )
-            }
-        }
+    Util.SelectableDelegateModel {
+        id: selectionModel
+        model: albumModelId
     }
 
     Component {
@@ -134,20 +102,22 @@ Widgets.NavigableFocusScope {
             id: gridView_id
 
             activeFocusOnTab:true
-
+            topMargin: root.gridViewMarginTop
             cellWidth: VLCStyle.gridItem_music_width
             cellHeight: VLCStyle.gridItem_music_height
 
             headerDelegate: root.header
 
-            delegateModel: delegateModelId
+            delegateModel: selectionModel
             model: albumModelId
 
             delegate: AudioGridItem {
                 id: audioGridItem
 
+                opacity: gridView_id.expandIndex !== -1 && gridView_id.expandIndex !== audioGridItem.index ? .7 : 1
+
                 onItemClicked : {
-                    delegateModelId.updateSelection( modifier , root.currentIndex, index)
+                    selectionModel.updateSelection( modifier , root.currentIndex, index)
                     gridView_id.currentIndex = index
                     gridView_id.forceActiveFocus()
                 }
@@ -155,58 +125,110 @@ Widgets.NavigableFocusScope {
                 onItemDoubleClicked: {
                     if ( model.id !== undefined ) { medialib.addAndPlay( model.id ) }
                 }
+
+                Behavior on opacity {
+                    NumberAnimation {
+                        duration: 100
+                    }
+                }
             }
 
             expandDelegate: MusicAlbumsGridExpandDelegate {
                 id: expandDelegateId
-                width: root.width
 
-                implicitHeight: gridView_id.height - gridView_id.cellHeight
-
+                onRetract: gridView_id.retract()
                 navigationParent: root
                 navigationCancel:  function() {  gridView_id.retract() }
                 navigationUp: function() {  gridView_id.retract() }
                 navigationDown: function() {}
-
             }
 
             onActionAtIndex: {
-                if (delegateModelId.selectedGroup.count === 1) {
+                if (selectionModel.selectedIndexes.length === 1) {
                     view._switchExpandItem(index)
                 } else {
-                    delegateModelId.actionAtIndex(index)
+                    _actionAtIndex(index)
                 }
             }
-            onSelectAll: delegateModelId.selectAll()
-            onSelectionUpdated: delegateModelId.updateSelection( keyModifiers, oldIndex, newIndex )
+            onSelectAll: selectionModel.selectAll()
+            onSelectionUpdated: selectionModel.updateSelection( keyModifiers, oldIndex, newIndex )
 
             navigationParent: root
         }
     }
 
-    Component {
-        id: listComponent
-        /* ListView */
-        Widgets.KeyNavigableListView {
-            id: listView_id
+    Widgets.MenuExt {
+        id: contextMenu
+        property var model: ({})
+        closePolicy: Popup.CloseOnReleaseOutside | Popup.CloseOnEscape
 
+        Widgets.MenuItemExt {
+            id: playMenuItem
+            text: "Play from start"
+            onTriggered: {
+                medialib.addAndPlay( contextMenu.model.id )
+                history.push(["player"])
+            }
+        }
+
+        Widgets.MenuItemExt {
+            text: "Enqueue"
+            onTriggered: medialib.addToPlaylist( contextMenu.model.id )
+        }
+
+        onClosed: contextMenu.parent.forceActiveFocus()
+
+    }
+
+    Component {
+        id: tableComponent
+
+        Widgets.KeyNavigableTableView {
+            id: tableView_id
+
+            readonly property int _nbCols: VLCStyle.gridColumnsForWidth(tableView_id.availableRowWidth)
+
+            model: albumModelId
+            headerColor: VLCStyle.colors.bg
+            onActionForSelection: _actionAtIndex(index)
+            navigationParent: root
+            section.property: "title_first_symbol"
             header: root.header
 
-            spacing: VLCStyle.margin_xxxsmall
+            sortModel:  [
+                { isPrimary: true, criteria: "title", width: VLCStyle.colWidth(2), text: i18n.qtr("Title"), headerDelegate: tableColumns.titleHeaderDelegate, colDelegate: tableColumns.titleDelegate },
+                { criteria: "main_artist", width: VLCStyle.colWidth(Math.max(tableView_id._nbCols - 3, 1)), text: i18n.qtr("Artist") },
+                { criteria: "durationShort", width:VLCStyle.colWidth(1), showSection: "", headerDelegate: tableColumns.timeHeaderDelegate, colDelegate: tableColumns.timeColDelegate },
+            ]
 
-            model: delegateModelId.parts.list
-            modelCount: delegateModelId.items.count
-
-            onActionAtIndex: delegateModelId.actionAtIndex(index)
-            onSelectAll: delegateModelId.selectAll()
-            onSelectionUpdated: delegateModelId.updateSelection( keyModifiers, oldIndex, newIndex )
-
-            navigationParent: root
             navigationCancel: function() {
-                if (listView_id.currentIndex <= 0)
+                if (tableView_id.currentIndex <= 0)
                     defaultNavigationCancel()
                 else
-                    listView_id.currentIndex = 0;
+                    tableView_id.currentIndex = 0;
+            }
+
+            onContextMenuButtonClicked: {
+                contextMenu.model = menuModel
+                contextMenu.popup(menuParent)
+            }
+
+            Widgets.TableColumns {
+                id: tableColumns
+            }
+
+            Connections {
+                target: albumModelId
+                onSortCriteriaChanged: {
+                    switch (albumModelId.sortCriteria) {
+                    case "title":
+                    case "main_artist":
+                        tableView_id.section.property = albumModelId.sortCriteria + "_first_symbol"
+                        break;
+                    default:
+                        tableView_id.section.property = ""
+                    }
+                }
             }
         }
     }
@@ -215,9 +237,9 @@ Widgets.NavigableFocusScope {
         id: view
 
         anchors.fill: parent
-        focus: delegateModelId.items.count !== 0
+        focus: albumModelId.count !== 0
 
-        initialItem: medialib.gridView ? gridComponent : listComponent
+        initialItem: medialib.gridView ? gridComponent : tableComponent
 
         Connections {
             target: medialib
@@ -225,7 +247,7 @@ Widgets.NavigableFocusScope {
                 if (medialib.gridView)
                     view.replace(gridComponent)
                 else
-                    view.replace(listComponent)
+                    view.replace(tableComponent)
             }
         }
 
@@ -241,7 +263,7 @@ Widgets.NavigableFocusScope {
 
     EmptyLabel {
         anchors.fill: parent
-        visible: delegateModelId.items.count === 0
+        visible: albumModelId.count === 0
         focus: visible
         text: i18n.qtr("No albums found\nPlease try adding sources, by going to the Network tab")
         navigationParent: root

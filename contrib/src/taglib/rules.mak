@@ -15,15 +15,14 @@ $(TARBALLS)/taglib-$(TAGLIB_VERSION).tar.gz:
 
 taglib: taglib-$(TAGLIB_VERSION).tar.gz .sum-taglib
 	$(UNPACK)
-ifdef HAVE_WINSTORE
-	$(APPLY) $(SRC)/taglib/unicode.patch
-endif
+	$(APPLY) $(SRC)/taglib/0001-use-SetFilePointerEx-instead-of-SetFilePointer.patch
+	$(APPLY) $(SRC)/taglib/0002-use-GetFileInformationByHandleEx-on-newer-builds-of-.patch
+	$(APPLY) $(SRC)/taglib/0003-don-t-use-CreateFile-in-UWP-builds.patch
 	$(APPLY) $(SRC)/taglib/use_resolvers_on_streams.patch
+	$(APPLY) $(SRC)/taglib/0001-Implement-ID3v2-readStyle-avoid-worst-case.patch
 	$(MOVE)
 
 .taglib: taglib toolchain.cmake
-	cd $< && $(HOSTVARS_PIC) $(CMAKE) \
-		-DBUILD_SHARED_LIBS:BOOL=OFF \
-		.
+	cd $< && $(HOSTVARS_PIC) $(CMAKE) .
 	cd $< && $(MAKE) install
 	touch $@

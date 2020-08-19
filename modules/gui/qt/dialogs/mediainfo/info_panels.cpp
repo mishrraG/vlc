@@ -548,7 +548,7 @@ InputStatsPanel::InputStatsPanel( QWidget *parent ): QWidget( parent )
      QLabel *topLabel = new QLabel( qtr( "Current"
                  " media / stream " "statistics") );
      topLabel->setWordWrap( true );
-     layout->addWidget( topLabel, 0, 0 );
+     layout->addWidget( topLabel, 0 );
 
      StatsTree = new QTreeWidget(this);
      StatsTree->setColumnCount( 3 );
@@ -591,6 +591,8 @@ InputStatsPanel::InputStatsPanel( QWidget *parent ): QWidget( parent )
                            "0", video, qtr("blocks") );
     CREATE_AND_ADD_TO_CAT( vdisplayed_stat, qtr("Displayed"),
                            "0", video, qtr("frames") );
+    CREATE_AND_ADD_TO_CAT( vlate_stat, qtr("Late"),
+                           "0", video, qtr("frames") );
     CREATE_AND_ADD_TO_CAT( vlost_frames_stat, qtr("Lost"),
                            "0", video, qtr("frames") );
 
@@ -611,7 +613,7 @@ InputStatsPanel::InputStatsPanel( QWidget *parent ): QWidget( parent )
     StatsTree->resizeColumnToContents( 0 );
     StatsTree->setColumnWidth( 1 , 200 );
 
-    layout->addWidget(StatsTree, 4, 0 );
+    layout->addWidget(StatsTree, 4 );
 
     statsView = new VLCStatsView( this );
     statsView->setFrameStyle( QFrame::NoFrame );
@@ -657,6 +659,7 @@ void InputStatsPanel::update( const input_stats_t& stats )
     /* Video */
     UPDATE_INT( vdecoded_stat,     stats.i_decoded_video );
     UPDATE_INT( vdisplayed_stat,   stats.i_displayed_pictures );
+    UPDATE_INT( vlate_stat,        stats.i_late_pictures );
     UPDATE_INT( vlost_frames_stat, stats.i_lost_pictures );
 
     /* Audio*/

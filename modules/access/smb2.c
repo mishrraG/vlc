@@ -29,7 +29,7 @@
 #include <sys/types.h>
 #include <sys/stat.h>
 #include <fcntl.h>
-#ifdef HAVE_POLL
+#ifdef HAVE_POLL_H
 # include <poll.h>
 #endif
 
@@ -42,6 +42,7 @@
 #include <vlc_keystore.h>
 #include <vlc_interrupt.h>
 #include <vlc_network.h>
+#include <vlc_memstream.h>
 
 #include <smb2/smb2.h>
 #include <smb2/libsmb2.h>
@@ -322,18 +323,34 @@ FileControl(stream_t *access, int i_query, va_list args)
 static char *
 vlc_smb2_get_url(vlc_url_t *url, const char *file)
 {
-    /* smb2://<psz_host><psz_path><file>?<psz_option> */
-    char *buf;
-    if (asprintf(&buf, "smb://%s%s%s%s%s%s", url->psz_host,
-                 url->psz_path != NULL ? url->psz_path : "",
-                 url->psz_path != NULL && url->psz_path[0] != '\0' &&
-                 url->psz_path[strlen(url->psz_path) - 1] != '/' ? "/" : "",
-                 file,
-                 url->psz_option != NULL ? "?" : "",
-                 url->psz_option != NULL ? url->psz_option : "") == -1)
-        return NULL;
+    /* smb2://<psz_host><i_port><psz_path><file>?<psz_option> */
+    struct vlc_memstream buf;
+    vlc_memstream_open(&buf);
+    if (strchr(url->psz_host, ':') != NULL)
+        vlc_memstream_printf(&buf, "smb://[%s]", url->psz_host);
     else
-        return buf;
+        vlc_memstream_printf(&buf, "smb://%s", url->psz_host);
+
+    if (url->i_port != 0)
+        vlc_memstream_printf(&buf, ":%d", url->i_port);
+
+    if (url->psz_path != NULL)
+    {
+        vlc_memstream_puts(&buf, url->psz_path);
+        if (url->psz_path[0] != '\0' && url->psz_path[strlen(url->psz_path) - 1] != '/')
+            vlc_memstream_putc(&buf, '/');
+    }
+    else
+        vlc_memstream_putc(&buf, '/');
+
+    vlc_memstream_puts(&buf, file);
+
+    if (url->psz_option)
+        vlc_memstream_printf(&buf, "?%s", url->psz_option);
+
+    if (vlc_memstream_close(&buf))
+        return NULL;
+    return buf.ptr;
 }
 
 static int AddItem(stream_t *access, struct vlc_readdir_helper *rdh,

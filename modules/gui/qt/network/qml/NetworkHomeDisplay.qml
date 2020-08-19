@@ -23,6 +23,7 @@ import QtQml 2.11
 import org.videolan.medialib 0.1
 
 import "qrc:///widgets/" as Widgets
+import "qrc:///util/" as Util
 import "qrc:///style/"
 
 Widgets.NavigableFocusScope {
@@ -37,38 +38,21 @@ Widgets.NavigableFocusScope {
         }
     }
 
+    function _actionAtIndex(index, model, selectionModel) {
+        if (selectionModel.items.get(index).model.type === NetworkMediaModel.TYPE_DIRECTORY
+                || selectionModel.items.get(index).model.type === NetworkMediaModel.TYPE_NODE)  {
+            history.push(["mc", "network", { tree: selectionModel.items.get(index).model.tree }]);
+        } else {
+            model.addAndPlay( selectionModel.selectedIndexes )
+        }
+    }
+
     Label {
         anchors.centerIn: parent
-        visible: (machineDM.items.count === 0 && lanDM.items.count === 0 )
+        visible: (deviceSection.model.count === 0 && lanSection.model.count === 0 )
         font.pixelSize: VLCStyle.fontHeight_xxlarge
         color: topFocusScope.activeFocus ? VLCStyle.colors.accent : VLCStyle.colors.text
         text: i18n.qtr("No network shares found")
-    }
-
-    NetworksSectionSelectableDM{
-        id: machineDM
-        model: NetworkDeviceModel {
-            id: machineModel
-            ctx: mainctx
-            sd_source: NetworkDeviceModel.CAT_DEVICES
-        }
-
-        onCurrentIndexChanged: {
-            deviceSection.currentIndex = currentIndex
-        }
-    }
-
-    NetworksSectionSelectableDM{
-        id: lanDM
-        model: NetworkDeviceModel {
-            id: lanModel
-            ctx: mainctx
-            sd_source: NetworkDeviceModel.CAT_LAN
-        }
-
-        onCurrentIndexChanged: {
-            lanSection.currentIndex = currentIndex
-        }
     }
 
     ScrollView {
@@ -87,32 +71,17 @@ Widgets.NavigableFocusScope {
                 id: deviceLabel
                 text: i18n.qtr("Devices")
                 width: flickable.width
-                visible: machineDM.items.count !== 0
+                visible: deviceSection.model.count !== 0
             }
 
-            Widgets.KeyNavigableListView {
+            NetworkHomeDeviceListView {
                 id: deviceSection
-
-                focus: false
-                visible: machineDM.items.count !== 0
-                onVisibleChanged: topFocusScope.resetFocus()
-
-                currentIndex: machineDM.currentIndex
-                onFocusChanged: {
-                    if (activeFocus && machineDM.currentIndex === -1 && machineDM.items.count > 0)
-                        machineDM.currentIndex = 0
-                }
+                ctx: mainctx
+                sd_source: NetworkDeviceModel.CAT_DEVICES
 
                 width: flickable.width
-                height: VLCStyle.gridItem_network_height
-                orientation: ListView.Horizontal
-
-                model: machineDM.parts.grid
-                modelCount: machineDM.items.count
-
-                onSelectAll: machineDM.selectAll()
-                onSelectionUpdated:  machineDM.updateSelection( keyModifiers, oldIndex, newIndex )
-                onActionAtIndex: machineDM.actionAtIndex(index)
+                visible: deviceSection.model.count !== 0
+                onVisibleChanged: topFocusScope.resetFocus()
 
                 navigationParent: topFocusScope
                 navigationDownItem: lanSection.visible ?  lanSection : undefined
@@ -127,35 +96,20 @@ Widgets.NavigableFocusScope {
                 id: lanLabel
                 text: i18n.qtr("LAN")
                 width: flickable.width
-                visible: lanDM.items.count !== 0
+                visible: lanSection.model.count !== 0
             }
 
-            Widgets.KeyNavigableListView {
+            NetworkHomeDeviceListView {
                 id: lanSection
-
-                visible: lanDM.items.count !== 0
-                onVisibleChanged: topFocusScope.resetFocus()
-                focus: false
-
-                currentIndex: lanDM.currentIndex
-                onFocusChanged: {
-                    if (activeFocus && lanDM.currentIndex === -1 && lanDM.items.count > 0)
-                        lanDM.currentIndex = 0
-                }
+                ctx: mainctx
+                sd_source: NetworkDeviceModel.CAT_LAN
 
                 width: flickable.width
-                height: VLCStyle.gridItem_network_height
-                orientation: ListView.Horizontal
-
-                model: lanDM.parts.grid
-                modelCount: lanDM.items.count
-
-                onSelectAll: lanDM.selectAll()
-                onSelectionUpdated:  lanDM.updateSelection( keyModifiers, oldIndex, newIndex )
-                onActionAtIndex: lanDM.actionAtIndex(index)
+                visible: lanSection.model.count !== 0
+                onVisibleChanged: topFocusScope.resetFocus()
 
                 navigationParent: topFocusScope
-                navigationUpItem: deviceSection.visible ? deviceSection : undefined
+                navigationUpItem: deviceSection.visible ?  deviceSection : undefined
 
                 onActiveFocusChanged: {
                     if (activeFocus)

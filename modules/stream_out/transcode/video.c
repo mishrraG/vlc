@@ -111,7 +111,6 @@ static int video_update_format_decoder( decoder_t *p_dec, vlc_video_context *vct
         return 0;
     }
 
-    id->decoder_vctx_out = vctx;
     es_format_Clean( &id->decoder_out );
     es_format_Copy( &id->decoder_out, &p_dec->fmt_out );
 
@@ -141,10 +140,9 @@ static picture_t *video_new_buffer_encoder( transcode_encoder_t *p_enc )
 
 static picture_t *transcode_video_filter_buffer_new( filter_t *p_filter )
 {
-    p_filter->fmt_out.video.i_chroma = p_filter->fmt_out.i_codec;
+    assert(p_filter->fmt_out.video.i_chroma == p_filter->fmt_out.i_codec);
     return picture_NewFromFormat( &p_filter->fmt_out.video );
 }
-
 
 static void decoder_queue_video( decoder_t *p_dec, picture_t *p_pic )
 {
@@ -179,7 +177,6 @@ int transcode_video_init( sout_stream_t *p_stream, const es_format_t *p_fmt,
     id->fifo.pic.last = &id->fifo.pic.first;
     id->b_transcode = true;
     es_format_Init( &id->decoder_out, VIDEO_ES, 0 );
-    id->decoder_vctx_out = NULL;
 
     /* Open decoder
      */
@@ -211,7 +208,6 @@ int transcode_video_init( sout_stream_t *p_stream, const es_format_t *p_fmt,
     {
         es_format_Clean( &id->decoder_out );
         es_format_Copy( &id->decoder_out, &id->p_decoder->fmt_out );
-        id->decoder_vctx_out = NULL /* TODO id->p_decoder->vctx_out*/;
     }
 
     /*
@@ -227,13 +223,8 @@ int transcode_video_init( sout_stream_t *p_stream, const es_format_t *p_fmt,
 
     struct encoder_owner *p_enc_owner = (struct encoder_owner*)sout_EncoderCreate(p_stream, sizeof(struct encoder_owner));
     if ( unlikely(p_enc_owner == NULL))
-    {
-        module_unneed( id->p_decoder, id->p_decoder->p_module );
-        id->p_decoder->p_module = NULL;
-        es_format_Clean( &id->decoder_out );
-        es_format_Clean( &encoder_tested_fmt_in );
-        return VLC_EGENERIC;
-    }
+       goto error;
+
     p_enc_owner->id = id;
     p_enc_owner->enc.cbs = &encoder_video_transcode_cbs;
 
@@ -242,33 +233,16 @@ int transcode_video_init( sout_stream_t *p_stream, const es_format_t *p_fmt,
                                 &id->p_decoder->fmt_in,
                                 id->p_decoder->fmt_out.i_codec,
                                 &encoder_tested_fmt_in ) )
-    {
-        module_unneed( id->p_decoder, id->p_decoder->p_module );
-        id->p_decoder->p_module = NULL;
-        es_format_Clean( &id->decoder_out );
-        es_format_Clean( &encoder_tested_fmt_in );
-        return VLC_EGENERIC;
-    }
+       goto error;
 
     p_enc_owner = (struct encoder_owner *)sout_EncoderCreate(p_stream, sizeof(struct encoder_owner));
     if ( unlikely(p_enc_owner == NULL))
-    {
-        module_unneed( id->p_decoder, id->p_decoder->p_module );
-        id->p_decoder->p_module = NULL;
-        es_format_Clean( &encoder_tested_fmt_in );
-        es_format_Clean( &id->decoder_out );
-        return VLC_EGENERIC;
-    }
+       goto error;
 
     id->encoder = transcode_encoder_new( &p_enc_owner->enc, &encoder_tested_fmt_in );
     if( !id->encoder )
-    {
-        module_unneed( id->p_decoder, id->p_decoder->p_module );
-        id->p_decoder->p_module = NULL;
-        es_format_Clean( &encoder_tested_fmt_in );
-        es_format_Clean( &id->decoder_out );
-        return VLC_EGENERIC;
-    }
+       goto error;
+
     p_enc_owner->id = id;
     p_enc_owner->enc.cbs = &encoder_video_transcode_cbs;
 
@@ -278,6 +252,13 @@ int transcode_video_init( sout_stream_t *p_stream, const es_format_t *p_fmt,
     es_format_Clean( &encoder_tested_fmt_in );
 
     return VLC_SUCCESS;
+
+error:
+    module_unneed( id->p_decoder, id->p_decoder->p_module );
+    id->p_decoder->p_module = NULL;
+    es_format_Clean( &encoder_tested_fmt_in );
+    es_format_Clean( &id->decoder_out );
+    return VLC_EGENERIC;
 }
 
 static const struct filter_video_callbacks transcode_filter_video_cbs =
@@ -385,7 +366,7 @@ static int transcode_video_filters_init( sout_stream_t *p_stream,
 
     if( b_master_sync )
     {
-        filter_chain_AppendFilter( id->p_f_chain, "fps", NULL, p_dst );
+        filter_chain_AppendFilter( id->p_f_chain, "fps", NULL, p_src );
         p_src = filter_chain_GetFmtOut( id->p_f_chain );
         src_ctx = filter_chain_GetVideoCtxOut( id->p_f_chain );
     }
@@ -589,7 +570,6 @@ int transcode_video_process( sout_stream_t *p_stream, sout_stream_id_sys_t *id,
             video_format_Copy( &id->decoder_out.video, &p_pic->format );
             transcode_video_framerate_apply( &p_pic->format, &id->decoder_out.video );
             transcode_video_sar_apply( &p_pic->format, &id->decoder_out.video );
-            id->decoder_vctx_out = picture_GetVideoContext(p_pic);
 
             if( !transcode_video_filters_configured( id ) )
             {
@@ -597,7 +577,7 @@ int transcode_video_process( sout_stream_t *p_stream, sout_stream_id_sys_t *id,
                                                   id->p_filterscfg,
                                                  (id->p_enccfg->video.fps.num > 0),
                                                  &id->decoder_out,
-                                                 id->decoder_vctx_out,
+                                                 picture_GetVideoContext(p_pic),
                                                  transcode_encoder_format_in( id->encoder ),
                                                  id ) != VLC_SUCCESS )
                     goto error;

@@ -122,17 +122,32 @@ namespace adaptive
                            BaseAdaptationSet *);
             ~SegmentTracker();
 
+            class Position
+            {
+                public:
+                    Position();
+                    Position(BaseRepresentation *, uint64_t);
+                    Position & operator++();
+                    bool isValid() const;
+                    std::string toString() const;
+                    uint64_t number;
+                    BaseRepresentation *rep;
+                    bool init_sent;
+                    bool index_sent;
+            };
+
             StreamFormat getCurrentFormat() const;
             std::list<std::string> getCurrentCodecs() const;
             const std::string & getStreamDescription() const;
             const std::string & getStreamLanguage() const;
             const Role & getStreamRole() const;
-            bool segmentsListReady() const;
             void reset();
             SegmentChunk* getNextChunk(bool, AbstractConnectionManager *);
             bool setPositionByTime(vlc_tick_t, bool, bool);
-            void setPositionByNumber(uint64_t, bool);
-            vlc_tick_t getPlaybackTime() const; /* Current segment start time if selected */
+            void setPosition(const Position &, bool);
+            bool setStartPosition();
+            Position getStartPosition();
+            vlc_tick_t getPlaybackTime(bool = false) const; /* Current segment start time if selected */
             bool getMediaPlaybackRange(vlc_tick_t *, vlc_tick_t *, vlc_tick_t *) const;
             vlc_tick_t getMinAheadTime() const;
             void notifyBufferingState(bool) const;
@@ -146,16 +161,13 @@ namespace adaptive
             void notify(const SegmentTrackerEvent &) const;
             bool first;
             bool initializing;
-            bool index_sent;
-            bool init_sent;
-            uint64_t next;
-            uint64_t curNumber;
+            Position current;
+            Position next;
             StreamFormat format;
             SharedResources *resources;
             AbstractAdaptationLogic *logic;
             const AbstractBufferingLogic *bufferingLogic;
             BaseAdaptationSet *adaptationSet;
-            BaseRepresentation *curRepresentation;
             std::list<SegmentTrackerListenerInterface *> listeners;
     };
 }

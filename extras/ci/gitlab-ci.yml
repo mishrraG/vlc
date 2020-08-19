@@ -12,9 +12,10 @@ default:
         - mv contrib/vlc-contrib-*.tar.bz2 contrib/vlc-contrib-${TRIPLET}-${VLC_CONTRIB_SHA}.tar.bz2 2>/dev/null || true
 
 variables:
-    VLC_WIN32_IMAGE: registry.videolan.org/vlc-debian-win32:20190416165205
-    VLC_WIN64_IMAGE: registry.videolan.org/vlc-debian-win64:20190416180622
-    VLC_WIN_LLVM_IMAGE: registry.videolan.org/vlc-debian-llvm-mingw:20190621125349
+    VLC_WIN32_IMAGE: registry.videolan.org/vlc-debian-win32:20200702161720
+    VLC_WIN64_IMAGE: registry.videolan.org/vlc-debian-win64:20200702144729
+    VLC_WIN_LLVM_IMAGE: registry.videolan.org/vlc-debian-llvm-mingw:20200703084018
+    VLC_UWP_LLVM_IMAGE: registry.videolan.org/vlc-debian-llvm-uwp:20200706065223
     VLC_DEBIAN_IMAGE: registry.videolan.org/vlc-debian-unstable:20200229201904
     VLC_ANDROID_IMAGE: registry.videolan.org/vlc-debian-android:20190717134531
     VLC_SNAP_IMAGE: registry.videolan.org/vlc-ubuntu-bionic:20190627090437
@@ -42,12 +43,6 @@ variables:
         HOST_ARCH: x86_64
         TRIPLET: $HOST_ARCH-w64-mingw32
 
-.variables-win64-llvm: &variables-win64-llvm
-        SHORTARCH: win64
-        HOST_ARCH: x86_64
-        TRIPLET: $HOST_ARCH-w64-mingw32
-        WINE_SDK_PATH: /usr/include/wine/wine/windows/
-
 .variables-macos: &variables-macos
         VLC_PATH: /Users/videolanci/sandbox/bin
         VLC_FORCE_KERNELVERSION: 18
@@ -58,7 +53,25 @@ variables:
         VLC_PATH: /Users/videolanci/sandbox/bin
         HOST_ARCH: arm64
         TRIPLET: $HOST_ARCH-apple-iphoneos
-        MAKEFLAGS: -j4
+        SDKNAME: iphoneos
+
+.variables-ios-armv7: &variables-ios-armv7
+        VLC_PATH: /Users/videolanci/sandbox/bin
+        HOST_ARCH: armv7
+        TRIPLET: $HOST_ARCH-apple-iphoneos
+        SDKNAME: iphoneos
+
+.variables-ios-simulator-x86_64: &variables-ios-simulator-x86_64
+        VLC_PATH: /Users/videolanci/sandbox/bin
+        HOST_ARCH: x86_64
+        TRIPLET: $HOST_ARCH-apple-iphonesimulator
+        SDKNAME: iphonesimulator
+
+.variables-tvos-arm64: &variables-tvos-arm64
+        VLC_PATH: /Users/videolanci/sandbox/bin
+        HOST_ARCH: arm64
+        TRIPLET: $HOST_ARCH-apple-appletvos
+        SDKNAME: appletvos
 
 .variables-android-arm: &variables-android-arm
         ANDROID_ARCH: arm
@@ -107,9 +120,9 @@ variables:
         fi
         if [ -n "$VLC_PREBUILT_CONTRIBS_URL" ]; then
             echo "Building using prebuilt contribs at $VLC_PREBUILT_CONTRIBS_URL"
-            extras/package/win32/build.sh -p -a $HOST_ARCH $NIGHTLY_EXTRA_BUILD_FLAGS
+            extras/package/win32/build.sh -p -a $HOST_ARCH $NIGHTLY_EXTRA_BUILD_FLAGS $LIBVLC_EXTRA_BUILD_FLAGS $UWP_EXTRA_BUILD_FLAGS
         else
-            extras/package/win32/build.sh -c -a $HOST_ARCH $NIGHTLY_EXTRA_BUILD_FLAGS
+            extras/package/win32/build.sh -c -a $HOST_ARCH $NIGHTLY_EXTRA_BUILD_FLAGS $LIBVLC_EXTRA_BUILD_FLAGS $UWP_EXTRA_BUILD_FLAGS
         fi
 
 win32:
@@ -128,7 +141,18 @@ win64-llvm:
     extends: .win-common
     image:
         name: $VLC_WIN_LLVM_IMAGE
-    variables: *variables-win64-llvm
+    variables:
+        <<: *variables-win64
+        WINE_SDK_PATH: /usr/include/wine/wine/windows/
+
+uwp64-libvlc-llvm:
+    extends: .win-common
+    image:
+        name: $VLC_UWP_LLVM_IMAGE
+    variables:
+        <<: *variables-win64
+        LIBVLC_EXTRA_BUILD_FLAGS: -z
+        UWP_EXTRA_BUILD_FLAGS: -u -w -x
 
 .nightly-win-common:
     extends: .win-common
@@ -160,7 +184,9 @@ nightly-win64-llvm:
     extends: .nightly-win-common
     image:
         name: $VLC_WIN_LLVM_IMAGE
-    variables: *variables-win64-llvm
+    variables:
+        <<: *variables-win64
+        WINE_SDK_PATH: /usr/include/wine/wine/windows/
 
 #
 # Debian
@@ -292,6 +318,7 @@ nightly-macos:
     after_script:
         - mkdir nightlies
         - mv build/vlc-*.dmg nightlies/$(basename build/vlc-*.dmg | sed "s/\.dmg/-${CI_COMMIT_SHORT_SHA}\.dmg/")
+        - mv build/vlc-*.tar.gz nightlies/$(basename build/vlc-*.tar.gz | sed "s/\.tar\.gz/-${CI_COMMIT_SHORT_SHA}\.tar\.gz/")
         - cd nightlies && find . -maxdepth 1 -type f -not -name SHA512SUM | xargs shasum -a 512 | tee SHA512SUM
     artifacts:
         paths:
@@ -300,22 +327,34 @@ nightly-macos:
 #
 # iOS
 #
-.ios-common:
+.apple-os-common:
     extends: .base-template
     tags:
         - macos
     script: |
         mkdir build && cd build
         if [ -n "$VLC_PREBUILT_CONTRIBS_URL" ]; then
-            ../extras/package/apple/build.sh --sdk=iphoneos --arch=$HOST_ARCH \
+            ../extras/package/apple/build.sh --sdk=$SDKNAME --arch=$HOST_ARCH \
                 --with-prebuilt-contribs
         else
-            ../extras/package/apple/build.sh --sdk=iphoneos --arch=$HOST_ARCH --package-contribs
+            ../extras/package/apple/build.sh --sdk=$SDKNAME --arch=$HOST_ARCH --package-contribs
         fi
 
 ios-arm64:
-    extends: .ios-common
+    extends: .apple-os-common
     variables: *variables-ios-arm64
+
+ios-armv7:
+    extends: .apple-os-common
+    variables: *variables-ios-armv7
+
+ios-simulator-x86_64:
+    extends: .apple-os-common
+    variables: *variables-ios-simulator-x86_64
+
+tvos-arm64:
+    extends: .apple-os-common
+    variables: *variables-tvos-arm64
 
 #
 # Android
@@ -365,3 +404,4 @@ pages:
             - public
     only:
         - schedules
+    except:

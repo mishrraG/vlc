@@ -3,26 +3,7 @@ vout_LTLIBRARIES =
 
 EXTRA_DIST += video_output/README
 
-OPENGL_COMMONSOURCES = video_output/opengl/vout_helper.c \
-	video_output/opengl/gl_api.c \
-	video_output/opengl/gl_api.h \
-	video_output/opengl/gl_common.h \
-	video_output/opengl/gl_util.c \
-	video_output/opengl/gl_util.h \
-	video_output/opengl/interop.h \
-	video_output/opengl/vout_helper.h \
-	video_output/opengl/internal.h video_output/opengl/fragment_shaders.c \
-	video_output/opengl/interop.c video_output/opengl/interop_sw.c \
-	video_output/opengl/renderer.c \
-	video_output/opengl/renderer.h \
-	video_output/opengl/sub_renderer.c \
-	video_output/opengl/sub_renderer.h
-if HAVE_LIBPLACEBO
-OPENGL_COMMONSOURCES += video_output/placebo_utils.c video_output/placebo_utils.h
-endif
-
-OPENGL_COMMONCFLAGS = $(LIBPLACEBO_CFLAGS)
-OPENGL_COMMONLIBS = $(LIBPLACEBO_LIBS)
+include video_output/opengl/Makefile.am
 
 if HAVE_DECKLINK
 libdecklinkoutput_plugin_la_SOURCES = video_output/decklink.cpp \
@@ -41,24 +22,24 @@ endif
 
 libglinterop_cvpx_plugin_la_SOURCES = video_output/opengl/interop_cvpx.c \
 	video_output/opengl/interop.h
-libglinterop_cvpx_plugin_la_LDFLAGS = $(AM_LDFLAGS) -rpath '$(voutdir)'
+libglinterop_cvpx_plugin_la_SOURCES += codec/vt_utils.c codec/vt_utils.h
+libglinterop_cvpx_plugin_la_LDFLAGS = $(AM_LDFLAGS) -rpath '$(voutdir)' \
+	-Wl,-framework,Foundation,-framework,CoreVideo
 
 if HAVE_OSX
-libvout_macosx_plugin_la_SOURCES = video_output/macosx.m $(OPENGL_COMMONSOURCES)
-libvout_macosx_plugin_la_CFLAGS = $(AM_CFLAGS) $(OPENGL_COMMONCFLAGS) -DHAVE_GL_CORE_SYMBOLS
-libvout_macosx_plugin_la_LIBADD = $(OPENGL_COMMONLIBS)
+libvout_macosx_plugin_la_SOURCES = video_output/macosx.m
+libvout_macosx_plugin_la_CFLAGS = $(AM_CFLAGS) -DHAVE_GL_CORE_SYMBOLS
+libvout_macosx_plugin_la_LIBADD = libvlc_opengl.la
 libvout_macosx_plugin_la_LDFLAGS = $(AM_LDFLAGS) -rpath '$(voutdir)' \
 	-Wl,-framework,OpenGL,-framework,Cocoa
 
-libcaopengllayer_plugin_la_SOURCES = video_output/caopengllayer.m $(OPENGL_COMMONSOURCES)
-libcaopengllayer_plugin_la_CFLAGS = $(AM_CFLAGS) $(OPENGL_COMMONCFLAGS) -DHAVE_GL_CORE_SYMBOLS
-libcaopengllayer_plugin_la_LIBADD = $(OPENGL_COMMONLIBS)
+libcaopengllayer_plugin_la_SOURCES = video_output/caopengllayer.m
+libcaopengllayer_plugin_la_CFLAGS = $(AM_CFLAGS)  -DHAVE_GL_CORE_SYMBOLS
+libcaopengllayer_plugin_la_LIBADD = libvlc_opengl.la
 libcaopengllayer_plugin_la_LDFLAGS = $(AM_LDFLAGS) -rpath '$(voutdir)' \
 	-Wl,-framework,OpenGL,-framework,Cocoa,-framework,QuartzCore
 
-libglinterop_cvpx_plugin_la_SOURCES += codec/vt_utils.c codec/vt_utils.h
-libglinterop_cvpx_plugin_la_LDFLAGS += -Wl,-framework,IOSurface \
-	-Wl,-framework,Foundation,-framework,CoreVideo,-framework,OpenGL
+libglinterop_cvpx_plugin_la_LDFLAGS += -Wl,-framework,IOSurface,-framework,OpenGL
 vout_LTLIBRARIES += libvout_macosx_plugin.la libcaopengllayer_plugin.la \
 	libglinterop_cvpx_plugin.la
 endif
@@ -66,33 +47,16 @@ if HAVE_IOS
 libglinterop_cvpx_plugin_la_CFLAGS = $(AM_CFLAGS) -DUSE_OPENGL_ES2
 endif
 
-libvout_ios_plugin_la_SOURCES = video_output/ios.m $(OPENGL_COMMONSOURCES)
+libvout_ios_plugin_la_SOURCES = video_output/ios.m
 libvout_ios_plugin_la_CFLAGS = $(AM_CFLAGS) $(OPENGL_COMMONCFLAGS) -DUSE_OPENGL_ES2
-libvout_ios_plugin_la_LIBADD = $(OPENGL_COMMONLIBS)
+libvout_ios_plugin_la_LIBADD = libvlc_opengles.la
 libvout_ios_plugin_la_LDFLAGS = $(AM_LDFLAGS) -rpath '$(voutdir)' \
-	-Wl,-framework,OpenGLES,-framework,QuartzCore,-framework,UIKit
+	-Wl,-framework,Foundation,-framework,OpenGLES,-framework,QuartzCore,-framework,UIKit
 if HAVE_IOS
 vout_LTLIBRARIES += libvout_ios_plugin.la libglinterop_cvpx_plugin.la
 endif
 if HAVE_TVOS
 vout_LTLIBRARIES += libvout_ios_plugin.la libglinterop_cvpx_plugin.la
-endif
-
-### OpenGL ###
-libgles2_plugin_la_SOURCES = $(OPENGL_COMMONSOURCES) video_output/opengl/display.c
-libgles2_plugin_la_CFLAGS = $(AM_CFLAGS) $(GLES2_CFLAGS) -DUSE_OPENGL_ES2 $(OPENGL_COMMONCFLAGS)
-libgles2_plugin_la_LIBADD = $(GLES2_LIBS) $(LIBM) $(OPENGL_COMMONLIBS)
-libgles2_plugin_la_LDFLAGS = $(AM_LDFLAGS) -rpath '$(voutdir)'
-
-EXTRA_LTLIBRARIES += libgles2_plugin.la
-vout_LTLIBRARIES += $(LTLIBgles2)
-
-libgl_plugin_la_SOURCES = $(OPENGL_COMMONSOURCES) video_output/opengl/display.c
-libgl_plugin_la_CFLAGS = $(AM_CFLAGS) $(GL_CFLAGS) $(OPENGL_COMMONCFLAGS)
-libgl_plugin_la_LIBADD = $(LIBM) $(OPENGL_COMMONLIBS)
-if HAVE_WIN32
-libgl_plugin_la_CFLAGS += -DHAVE_GL_CORE_SYMBOLS
-libgl_plugin_la_LIBADD += $(GL_LIBS)
 endif
 
 libglinterop_vaapi_plugin_la_SOURCES = video_output/opengl/interop_vaapi.c \
@@ -107,7 +71,6 @@ libglinterop_vdpau_plugin_la_CFLAGS = $(AM_CFLAGS) $(VDPAU_CFLAGS)
 libglinterop_vdpau_plugin_la_LIBADD = $(LIBDL) libvlc_vdpau.la $(X_LIBS) $(X_PRE_LIBS) -lX11
 
 if HAVE_GL
-vout_LTLIBRARIES += libgl_plugin.la
 if HAVE_EGL
 if HAVE_VAAPI
 vout_LTLIBRARIES += libglinterop_vaapi_plugin.la
@@ -157,6 +120,9 @@ libdirect3d11_plugin_la_SOURCES = video_output/win32/direct3d11.c \
  video_output/win32/d3d11_swapchain.c video_output/win32/d3d11_swapchain.h \
  video_output/win32/common.c video_output/win32/common.h
 libdirect3d11_plugin_la_LIBADD = libchroma_copy.la libd3d11_common.la $(LIBCOM) -luuid
+if HAVE_DCOMP
+libdirect3d11_plugin_la_SOURCES += video_output/win32/dcomp_wrapper.cpp video_output/win32/dcomp_wrapper.h
+endif
 if !HAVE_WINSTORE
 libdirect3d11_plugin_la_SOURCES += video_output/win32/events.c \
  video_output/win32/events.h \
@@ -171,19 +137,19 @@ libdirect3d11_plugin_la_LDFLAGS = $(AM_LDFLAGS) -rpath '$(voutdir)'
 vout_LTLIBRARIES += $(LTLIBdirect3d11)
 EXTRA_LTLIBRARIES += libdirect3d11_plugin.la
 
-libglwin32_plugin_la_SOURCES = $(OPENGL_COMMONSOURCES) \
+libglwin32_plugin_la_SOURCES = \
 	video_output/win32/glwin32.c \
 	video_output/win32/common.c video_output/win32/common.h \
 	video_output/win32/events.c video_output/win32/events.h \
 	video_output/win32/sensors.cpp \
 	video_output/win32/win32touch.c video_output/win32/win32touch.h
-libwgl_plugin_la_SOURCES = video_output/win32/wgl.c $(OPENGL_COMMONSOURCES)
+libwgl_plugin_la_SOURCES = video_output/win32/wgl.c
 
 libglwin32_plugin_la_CPPFLAGS = $(AM_CPPFLAGS) \
 	-DMODULE_NAME_IS_glwin32
 
-libglwin32_plugin_la_LIBADD = libchroma_copy.la -lopengl32 -lgdi32 $(LIBCOM) -luuid $(OPENGL_COMMONLIBS)
-libwgl_plugin_la_LIBADD = -lopengl32 -lgdi32 $(OPENGL_COMMONLIBS)
+libglwin32_plugin_la_LIBADD = libchroma_copy.la -lopengl32 -lgdi32 $(LIBCOM) -luuid libvlc_opengl.la
+libwgl_plugin_la_LIBADD = -lopengl32 -lgdi32 libvlc_opengl.la
 
 libglwin32_plugin_la_CFLAGS = $(AM_CFLAGS) $(OPENGL_COMMONCFLAGS) -DHAVE_GL_CORE_SYMBOLS
 libwgl_plugin_la_CFLAGS = $(AM_CFLAGS) $(OPENGL_COMMONCFLAGS)
@@ -220,8 +186,8 @@ vout_LTLIBRARIES += libegl_win32_plugin.la
 endif
 endif
 
-libdrawable_plugin_la_SOURCES = video_output/drawable.c
-if HAVE_WIN32
+libdrawable_plugin_la_SOURCES = video_output/win32/drawable.c
+if HAVE_WIN32_DESKTOP
 vout_LTLIBRARIES += libdrawable_plugin.la
 endif
 

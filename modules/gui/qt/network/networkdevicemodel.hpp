@@ -65,7 +65,7 @@ public:
 
     Q_PROPERTY(QmlMainContext* ctx READ getCtx WRITE setCtx NOTIFY ctxChanged)
     Q_PROPERTY(SDCatType sd_source READ getSdSource WRITE setSdSource NOTIFY sdSourceChanged)
-
+    Q_PROPERTY(int count READ getCount NOTIFY countChanged)
 
 public:
     NetworkDeviceModel( QObject* parent = nullptr );
@@ -80,14 +80,21 @@ public:
     inline QmlMainContext* getCtx() { return m_ctx; }
     inline SDCatType getSdSource() { return m_sdSource; }
 
+    int getCount() const;
+
     Q_INVOKABLE bool addToPlaylist( int index );
     Q_INVOKABLE bool addToPlaylist(const QVariantList& itemIdList);
+    Q_INVOKABLE bool addToPlaylist(const QModelIndexList& itemIdList);
     Q_INVOKABLE bool addAndPlay( int index );
     Q_INVOKABLE bool addAndPlay(const QVariantList& itemIdList);
+    Q_INVOKABLE bool addAndPlay(const QModelIndexList& itemIdList);
+
+    Q_INVOKABLE QMap<QString, QVariant> getDataAt(int index);
 
 signals:
     void ctxChanged();
     void sdSourceChanged();
+    void countChanged();
 
 private:
     using MediaSourcePtr = vlc_shared_data_ptr_type(vlc_media_source_t,

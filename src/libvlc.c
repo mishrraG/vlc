@@ -101,6 +101,23 @@ libvlc_int_t * libvlc_InternalCreate( void )
     return p_libvlc;
 }
 
+static void libvlc_AddInterfaces(libvlc_int_t *libvlc, const char *varname)
+{
+    char *str = var_InheritString(libvlc, varname);
+    if (str == NULL)
+        return;
+
+    char *state;
+    char *intf = strtok_r(str, ":", &state);
+
+    while (intf != NULL) {
+        libvlc_InternalAddIntf(libvlc, intf);
+        intf = strtok_r(NULL, ":", &state);
+    }
+
+    free(str);
+}
+
 /**
  * Initialize a libvlc instance
  * This function initializes a previously allocated libvlc instance:
@@ -113,9 +130,6 @@ int libvlc_InternalInit( libvlc_int_t *p_libvlc, int i_argc,
                          const char *ppsz_argv[] )
 {
     libvlc_priv_t *priv = libvlc_priv (p_libvlc);
-    char *       psz_modules = NULL;
-    char *       psz_parser = NULL;
-    char *       psz_control = NULL;
     char        *psz_val;
     int          i_ret = VLC_EGENERIC;
 
@@ -200,7 +214,7 @@ int libvlc_InternalInit( libvlc_int_t *p_libvlc, int i_argc,
 
     priv->p_thumbnailer = vlc_thumbnailer_Create( VLC_OBJECT( p_libvlc ) );
     if ( priv->p_thumbnailer == NULL )
-        msg_Warn( p_libvlc, "Failed to instantiate VLC thumbnailer" );
+        msg_Warn( p_libvlc, "Failed to instantiate thumbnailer" );
 
     /*
      * Initialize hotkey handling
@@ -249,7 +263,7 @@ int libvlc_InternalInit( libvlc_int_t *p_libvlc, int i_argc,
 
 #ifdef ENABLE_VLM
     /* Initialize VLM if vlm-conf is specified */
-    psz_parser = var_InheritString( p_libvlc, "vlm-conf" );
+    char *psz_parser = var_InheritString( p_libvlc, "vlm-conf" );
     if( psz_parser )
     {
         priv->p_vlm = vlm_New( p_libvlc, psz_parser );
@@ -262,43 +276,8 @@ int libvlc_InternalInit( libvlc_int_t *p_libvlc, int i_argc,
     /*
      * Load background interfaces
      */
-    psz_modules = var_InheritString( p_libvlc, "extraintf" );
-    psz_control = var_InheritString( p_libvlc, "control" );
-
-    if( psz_modules && psz_control )
-    {
-        char* psz_tmp;
-        if( asprintf( &psz_tmp, "%s:%s", psz_modules, psz_control ) != -1 )
-        {
-            free( psz_modules );
-            psz_modules = psz_tmp;
-        }
-    }
-    else if( psz_control )
-    {
-        free( psz_modules );
-        psz_modules = strdup( psz_control );
-    }
-
-    psz_parser = psz_modules;
-    while ( psz_parser && *psz_parser )
-    {
-        char *psz_module, *psz_temp;
-        psz_module = psz_parser;
-        psz_parser = strchr( psz_module, ':' );
-        if ( psz_parser )
-        {
-            *psz_parser = '\0';
-            psz_parser++;
-        }
-        if( asprintf( &psz_temp, "%s,none", psz_module ) != -1)
-        {
-            libvlc_InternalAddIntf( p_libvlc, psz_temp );
-            free( psz_temp );
-        }
-    }
-    free( psz_modules );
-    free( psz_control );
+    libvlc_AddInterfaces(p_libvlc, "extraintf");
+    libvlc_AddInterfaces(p_libvlc, "control");
 
     if( var_InheritBool( p_libvlc, "network-synchronisation") )
         libvlc_InternalAddIntf( p_libvlc, "netsync,none" );
@@ -371,9 +350,6 @@ void libvlc_InternalCleanup( libvlc_int_t *p_libvlc )
     if ( priv->p_thumbnailer )
         vlc_thumbnailer_Release( priv->p_thumbnailer );
 
-    if( priv->media_source_provider )
-        vlc_media_source_provider_Delete( priv->media_source_provider );
-
     libvlc_InternalDialogClean( p_libvlc );
     libvlc_InternalKeystoreClean( p_libvlc );
 
@@ -405,6 +381,9 @@ void libvlc_InternalCleanup( libvlc_int_t *p_libvlc )
 
     if ( priv->p_media_library )
         libvlc_MlRelease( priv->p_media_library );
+
+    if( priv->media_source_provider )
+        vlc_media_source_provider_Delete( priv->media_source_provider );
 
     libvlc_InternalActionsClean( p_libvlc );
 

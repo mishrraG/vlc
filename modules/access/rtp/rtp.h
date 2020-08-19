@@ -55,11 +55,9 @@ rtp_session_t *rtp_session_create (demux_t *);
 void rtp_session_destroy (demux_t *, rtp_session_t *);
 void rtp_queue (demux_t *, rtp_session_t *, block_t *);
 bool rtp_dequeue (demux_t *, const rtp_session_t *, vlc_tick_t *);
-void rtp_dequeue_force (demux_t *, const rtp_session_t *);
 int rtp_add_type (demux_t *demux, rtp_session_t *ses, const rtp_pt_t *pt);
 
 void *rtp_dgram_thread (void *data);
-void *rtp_stream_thread (void *data);
 
 /* Global data */
 typedef struct
@@ -69,15 +67,14 @@ typedef struct
 #ifdef HAVE_SRTP
     struct srtp_session_t *srtp;
 #endif
-    int           fd;
-    int           rtcp_fd;
+    struct vlc_dtls *rtp_sock;
+    struct vlc_dtls *rtcp_sock;
     vlc_thread_t  thread;
 
     vlc_tick_t    timeout;
     uint16_t      max_dropout; /**< Max packet forward misordering */
     uint16_t      max_misorder; /**< Max packet backward misordering */
     uint8_t       max_src; /**< Max simultaneous RTP sources */
-    bool          thread_ready;
     bool          autodetect; /**< Payload type autodetection pending */
 } demux_sys_t;
 

@@ -31,71 +31,74 @@
 
 struct vlc_gl_interop *
 vlc_gl_interop_New(struct vlc_gl_t *gl, const struct vlc_gl_api *api,
-                   vlc_video_context *context, const video_format_t *fmt,
-                   bool subpics)
+                   vlc_video_context *context, const video_format_t *fmt)
 {
-    const char *glexts = (const char *) api->vt.GetString(GL_EXTENSIONS);
-    assert(glexts);
-    if (!glexts)
-    {
-        msg_Err(gl, "glGetString returned NULL");
-        return NULL;
-    }
-
     struct vlc_gl_interop *interop = vlc_object_create(gl, sizeof(*interop));
     if (!interop)
         return NULL;
 
     interop->init = opengl_interop_init_impl;
     interop->ops = NULL;
-    interop->fmt = *fmt;
+    interop->fmt_out = interop->fmt_in = *fmt;
     /* this is the only allocated field, and we don't need it */
-    interop->fmt.p_palette = NULL;
+    interop->fmt_out.p_palette = interop->fmt_in.p_palette = NULL;
 
     interop->gl = gl;
     interop->api = api;
     interop->vt = &api->vt;
 
-    int ret;
-    if (subpics)
-    {
-        interop->fmt.i_chroma = VLC_CODEC_RGB32;
-        /* Normal orientation and no projection for subtitles */
-        interop->fmt.orientation = ORIENT_NORMAL;
-        interop->fmt.projection_mode = PROJECTION_MODE_RECTANGULAR;
-        interop->fmt.primaries = COLOR_PRIMARIES_UNDEF;
-        interop->fmt.transfer = TRANSFER_FUNC_UNDEF;
-        interop->fmt.space = COLOR_SPACE_UNDEF;
+    const vlc_chroma_description_t *desc =
+        vlc_fourcc_GetChromaDescription(fmt->i_chroma);
 
-        ret = opengl_interop_generic_init(interop, false);
+    if (desc == NULL)
+    {
+        vlc_object_delete(interop);
+        return NULL;
     }
+    if (desc->plane_count == 0)
+    {
+        /* Opaque chroma: load a module to handle it */
+        interop->vctx = context;
+        interop->module = module_need_var(interop, "glinterop", "glinterop");
+    }
+
+    int ret;
+    if (interop->module != NULL)
+        ret = VLC_SUCCESS;
     else
     {
-        const vlc_chroma_description_t *desc =
-            vlc_fourcc_GetChromaDescription(fmt->i_chroma);
-
-        if (desc == NULL)
-        {
-            vlc_object_delete(interop);
-            return NULL;
-        }
-        if (desc->plane_count == 0)
-        {
-            /* Opaque chroma: load a module to handle it */
-            interop->vctx = context;
-            interop->module = module_need_var(interop, "glinterop", "glinterop");
-        }
-
-        if (interop->module != NULL)
-            ret = VLC_SUCCESS;
-        else
-        {
-            /* Software chroma or gl hw converter failed: use a generic
-             * converter */
-            ret = opengl_interop_generic_init(interop, true);
-        }
+        /* Software chroma or gl hw converter failed: use a generic
+         * converter */
+        ret = opengl_interop_generic_init(interop, true);
     }
 
+    if (ret != VLC_SUCCESS)
+    {
+        vlc_object_delete(interop);
+        return NULL;
+    }
+
+    return interop;
+}
+
+struct vlc_gl_interop *
+vlc_gl_interop_NewForSubpictures(struct vlc_gl_t *gl,
+                                 const struct vlc_gl_api *api)
+{
+    struct vlc_gl_interop *interop = vlc_object_create(gl, sizeof(*interop));
+    if (!interop)
+        return NULL;
+
+    interop->init = opengl_interop_init_impl;
+    interop->ops = NULL;
+    interop->gl = gl;
+    interop->api = api;
+    interop->vt = &api->vt;
+
+    video_format_Init(&interop->fmt_in, VLC_CODEC_RGB32);
+    interop->fmt_out = interop->fmt_in;
+
+    int ret = opengl_interop_generic_init(interop, false);
     if (ret != VLC_SUCCESS)
     {
         vlc_object_delete(interop);
@@ -353,10 +356,9 @@ opengl_interop_init_impl(struct vlc_gl_interop *interop, GLenum tex_target,
     if (!desc)
         return VLC_EGENERIC;
 
-    assert(!interop->fmt.p_palette);
-    interop->sw_fmt = interop->fmt;
-    interop->sw_fmt.i_chroma = chroma;
-    interop->sw_fmt.space = yuv_space;
+    assert(!interop->fmt_out.p_palette);
+    interop->fmt_out.i_chroma = chroma;
+    interop->fmt_out.space = yuv_space;
     interop->tex_target = tex_target;
 
     if (chroma == VLC_CODEC_XYZ12)

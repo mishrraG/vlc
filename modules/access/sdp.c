@@ -29,56 +29,28 @@
 #include <vlc_plugin.h>
 #include <vlc_access.h>
 
-static int Open (vlc_object_t *);
-
-vlc_module_begin ()
-    set_shortname (N_("SDP"))
-    set_description (N_("Session Description Protocol"))
-    set_category (CAT_INPUT)
-    set_subcategory (SUBCAT_INPUT_ACCESS)
-
-    set_capability ("access", 0)
-    set_callback(Open)
-    add_shortcut ("sdp")
-vlc_module_end()
-
-static ssize_t Read (stream_t *, void *, size_t);
-static int Seek (stream_t *, uint64_t);
-static int Control (stream_t *, int, va_list);
-
-static int Open (vlc_object_t *obj)
-{
-    stream_t *access = (stream_t *)obj;
-
-    access->pf_read = Read;
-    access->pf_block = NULL;
-    access->pf_seek = Seek;
-    access->pf_control = Control;
-    access->p_sys = (char *)access->psz_location;
-
-    return VLC_SUCCESS;
-}
-
 static ssize_t Read (stream_t *access, void *buf, size_t len)
 {
-    char *in = access->p_sys, *out = buf;
-    size_t i;
+    const char **inp = access->p_sys, *in = *inp;
+    size_t avail = strnlen(in, len);
 
-    for (i = 0; i < len && *in != '\0'; i++)
-        *(out++) = *(in++);
+    if (len > avail)
+        len = avail;
 
-    access->p_sys = in;
-    return i;
+    memcpy(buf, in, len);
+    *inp += len;
+    return len;
 }
 
 static int Seek (stream_t *access, uint64_t position)
 {
+    const char **inp = access->p_sys;
+
 #if (UINT64_MAX > SIZE_MAX)
     if (unlikely(position > SIZE_MAX))
         position = SIZE_MAX;
 #endif
-    access->p_sys = (char *)access->psz_location
-                    + strnlen(access->psz_location, position);
+    *inp = access->psz_location + strnlen(access->psz_location, position);
     return VLC_SUCCESS;
 }
 
@@ -109,3 +81,33 @@ static int Control (stream_t *access, int query, va_list args)
     }
     return VLC_EGENERIC;
 }
+
+static int Open (vlc_object_t *obj)
+{
+    stream_t *access = (stream_t *)obj;
+
+    const char **sys = vlc_obj_malloc(obj, sizeof (*sys));
+    if (unlikely(sys == NULL))
+        return VLC_ENOMEM;
+
+    *sys = access->psz_location;
+
+    access->pf_read = Read;
+    access->pf_block = NULL;
+    access->pf_seek = Seek;
+    access->pf_control = Control;
+    access->p_sys = sys;
+
+    return VLC_SUCCESS;
+}
+
+vlc_module_begin()
+    set_shortname(N_("SDP"))
+    set_description(N_("Session Description Protocol"))
+    set_category(CAT_INPUT)
+    set_subcategory(SUBCAT_INPUT_ACCESS)
+
+    set_capability("access", 0)
+    set_callback(Open)
+    add_shortcut("sdp")
+vlc_module_end()

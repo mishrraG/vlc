@@ -55,6 +55,8 @@ live555: $(LIVE555_FILE) .sum-live555
 	cd live && sed -i.orig -e s/"libtool -s -o"/"ar cr"/g config.macosx*
 	# Add Extra LDFLAGS for macOS
 	cd live && sed -i.orig -e 's%$(CXX)%$(CXX)\ $(EXTRA_LDFLAGS)%' config.macosx
+	# Add CXXFLAGS for macOS (force libc++)
+	cd live && sed -i.orig -e 's%^\(CPLUSPLUS_FLAGS.*\)$$%\1 '"$(CXXFLAGS)%" config.macosx
 	# Add the Extra_CFLAGS to all config files
 	cd live && sed -i.orig \
 		-e 's%^\(COMPILE_OPTS.*\)$$%\1 '"$(LIVE_EXTRA_CFLAGS)%" config.*
@@ -87,7 +89,7 @@ ifdef HAVE_ANDROID
 	# Don't use unavailable off64_t functions
 	$(APPLY) $(SRC)/live555/file-offset-bits-64.patch
 endif
-
+	cd $(UNPACK_DIR) && sed -i.orig "s,LIBRARY_LINK =.*,LIBRARY_LINK = $(AR) cr ,g" config.macosx
 	mv live.$(LIVE555_VERSION) $@ && touch $@
 
 SUBDIRS=groupsock liveMedia UsageEnvironment BasicUsageEnvironment

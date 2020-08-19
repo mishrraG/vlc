@@ -31,6 +31,7 @@
 #include <vlc_plugin.h>
 #include <vlc_vout.h>
 #include <assert.h>
+#include "vout_private.h"
 #include "vout_internal.h"
 #include "display.h"
 
@@ -54,11 +55,10 @@ static void VoutViewpointMoved(void *sys, const vlc_viewpoint_t *vp)
 /*****************************************************************************
  *
  *****************************************************************************/
-vout_display_t *vout_OpenWrapper(vout_thread_t *vout,
+vout_display_t *vout_OpenWrapper(vout_thread_t *vout, vout_thread_private_t *sys,
                      const char *splitter_name, const vout_display_cfg_t *cfg,
-                     vlc_video_context *vctx)
+                     video_format_t *fmt, vlc_video_context *vctx)
 {
-    vout_thread_sys_t *sys = vout->p;
     vout_display_t *vd;
     vout_display_owner_t owner = {
         .viewpoint_moved = VoutViewpointMoved, .sys = vout,
@@ -73,8 +73,7 @@ vout_display_t *vout_OpenWrapper(vout_thread_t *vout,
     else
         modlist = "splitter,none";
 
-    vd = vout_display_New(VLC_OBJECT(vout), &sys->original, vctx, cfg,
-                          modlist, &owner);
+    vd = vout_display_New(VLC_OBJECT(vout), fmt, vctx, cfg, modlist, &owner);
     free(modlistbuf);
 
     if (vd == NULL)
@@ -129,10 +128,8 @@ error:
 /*****************************************************************************
  *
  *****************************************************************************/
-void vout_CloseWrapper(vout_thread_t *vout, vout_display_t *vd)
+void vout_CloseWrapper(vout_thread_t *vout, vout_thread_private_t *sys, vout_display_t *vd)
 {
-    vout_thread_sys_t *sys = vout->p;
-
     assert(sys->display_pool && sys->private_pool);
 
     picture_pool_Release(sys->private_pool);

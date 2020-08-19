@@ -21,6 +21,14 @@ ifdef HAVE_ANDROID
 	cp "${ANDROID_NDK}"/sources/android/cpufeatures/cpu-features.c $(UNPACK_DIR)/vpx_ports
 	cp "${ANDROID_NDK}"/sources/android/cpufeatures/cpu-features.h $(UNPACK_DIR)
 endif
+ifdef HAVE_MACOSX
+ifeq ($(ARCH),aarch64)
+	$(APPLY) $(SRC)/vpx/libvpx-darwin-aarch64.patch
+endif
+endif
+	# Disable automatic addition of -fembed-bitcode for iOS
+	# as it is enabled through --extra-cflags if necessary.
+	$(APPLY) $(SRC)/vpx/libvpx-remove-bitcode.patch
 	$(MOVE)
 
 DEPS_vpx =
@@ -59,16 +67,12 @@ ifdef HAVE_ANDROID
 VPX_OS := android
 else ifdef HAVE_LINUX
 VPX_OS := linux
-else ifdef HAVE_MACOSX
-VPX_OS := darwin10
-VPX_CROSS :=
-else ifdef HAVE_IOS
+else ifdef HAVE_DARWIN_OS
 VPX_CROSS :=
 ifeq ($(ARCH),$(filter $(ARCH), arm aarch64))
 VPX_OS := darwin
 else
 VPX_OS := darwin11
-VPX_CROSS :=
 endif
 else ifdef HAVE_SOLARIS
 VPX_OS := solaris
@@ -97,15 +101,13 @@ VPX_CONF := \
 	--enable-vp9-highbitdepth \
 	--disable-tools
 
+ifneq ($(filter arm aarch64, $(ARCH)),)
+# Only enable runtime cpu detect on architectures other than arm/aarch64
+# when building for Windows and Darwin
 ifndef HAVE_WIN32
-ifndef HAVE_IOS
+ifndef HAVE_DARWIN_OS
 VPX_CONF += --enable-runtime-cpu-detect
 endif
-else
-# WIN32
-ifeq ($(filter arm aarch64, $(ARCH)),)
-# Only enable runtime cpu detect on architectures other than arm/aarch64
-VPX_CONF += --enable-runtime-cpu-detect
 endif
 endif
 
@@ -143,9 +145,14 @@ ifneq ($(filter i386 x86_64,$(ARCH)),)
 VPX_CONF += --disable-mmx
 endif
 
-ifndef WITH_OPTIMIZATION
-VPX_CONF += --enable-debug --disable-optimizations
+ifdef WITH_OPTIMIZATION
+VPX_CFLAGS += -DNDEBUG
+else
+VPX_CONF += --disable-optimizations
 endif
+
+# Always enable debug symbols, we strip in the final executables if needed
+VPX_CONF += --enable-debug
 
 ifdef HAVE_ANDROID
 # Starting NDK19, standalone toolchains are deprecated and gcc is not shipped.
@@ -161,7 +168,7 @@ endif
 	rm -rf $(PREFIX)/include/vpx
 	cd $< && LDFLAGS="$(VPX_LDFLAGS)" CROSS=$(VPX_CROSS) $(VPX_HOSTVARS) ./configure --target=$(VPX_TARGET) \
 		$(VPX_CONF) --prefix=$(PREFIX)
-	cd $< && $(MAKE)
+	cd $< && CONFIG_DEBUG=1 $(MAKE)
 	$(call pkg_static,"vpx.pc")
-	cd $< && $(MAKE) install
+	cd $< && CONFIG_DEBUG=1 $(MAKE) install
 	touch $@

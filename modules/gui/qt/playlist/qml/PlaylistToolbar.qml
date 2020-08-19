@@ -32,9 +32,11 @@ Widgets.NavigableFocusScope {
     property int rightPadding: 0
     height: VLCStyle.heightBar_normal
 
+    property VLCColors _colors: VLCStyle.colors
+
     Rectangle {
         anchors.fill: parent
-        color: VLCStyle.colors.banner
+        color: _colors.banner
 
         RowLayout {
             anchors {
@@ -56,30 +58,23 @@ Widgets.NavigableFocusScope {
                 checked: mainPlaylistController.repeatMode !== PlaylistControllerModel.PLAYBACK_REPEAT_NONE
                 onClicked: mainPlaylistController.toggleRepeatMode()
                 focusPolicy: Qt.NoFocus
+
+                color: _colors.buttonText
+                colorDisabled: _colors.textInactive
             }
 
             Widgets.IconToolButton {
                 id: shuffle
                 Layout.alignment: Qt.AlignHCenter
                 //Layout.minimumWidth: VLCStyle.icon_normal * 2
+                enabled: !mainPlaylistController.empty
                 size: VLCStyle.icon_normal
                 iconText: VLCIcons.shuffle_on
                 onClicked: mainPlaylistController.shuffle()
                 focusPolicy: Qt.NoFocus
-            }
 
-            Label {
-                Layout.fillWidth: true
-                Layout.alignment: Qt.AlignHCenter
-                horizontalAlignment: Text.AlignHCenter
-                text: (view.mode === "select")
-                        ? i18n.qtr("Select tracks (%1)").arg(plmodel.selectedCount)
-                    : (view.mode === "move")
-                        ? i18n.qtr("Move tracks (%1)").arg(plmodel.selectedCount)
-                    : i18n.qtr("%1 tracks").arg(plmodel.count)
-                font.pixelSize: VLCStyle.fontSize_normal
-                color: VLCStyle.colors.text
-                elide: Text.ElideRight
+                color: _colors.buttonText
+                colorDisabled: _colors.textInactive
             }
 
             Widgets.SortControl {
@@ -109,6 +104,8 @@ Widgets.NavigableFocusScope {
                 Keys.priority: Keys.AfterItem
                 Keys.onPressed: defaultKeyAction(event, 0)
                 navigationParent: playlistToolbar
+
+                _colors: playlistToolbar._colors
             }
 
             Widgets.IconToolButton {
@@ -116,9 +113,13 @@ Widgets.NavigableFocusScope {
                 Layout.alignment: Qt.AlignHCenter
                 //Layout.minimumWidth: VLCStyle.icon_normal * 2
                 size: VLCStyle.icon_normal
+                enabled: !mainPlaylistController.empty
                 iconText: VLCIcons.playlist_clear
                 onClicked: mainPlaylistController.clear()
                 focusPolicy: Qt.NoFocus
+
+                color: _colors.buttonText
+                colorDisabled: _colors.textInactive
             }
         }
     }

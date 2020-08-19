@@ -45,7 +45,7 @@ libqt_plugin_la_CXXFLAGS += $(WAYLAND_CLIENT_CFLAGS)
 libqt_plugin_la_LIBADD += $(WAYLAND_CLIENT_LIBS)
 endif
 if HAVE_WIN32
-libqt_plugin_la_LIBADD += $(LIBCOM) -lcomctl32 -luuid
+libqt_plugin_la_LIBADD += $(LIBCOM) -lcomctl32 -luuid -ld3d11
 endif
 if UPDATE_CHECK
 libqt_plugin_la_CPPFLAGS += -DUPDATE_CHECK
@@ -114,7 +114,16 @@ libqt_plugin_la_SOURCES = \
 	gui/qt/dialogs/sout/sout_widgets.hpp \
 	gui/qt/dialogs/toolbar/toolbareditor.cpp gui/qt/dialogs/toolbar/toolbareditor.hpp \
 	gui/qt/dialogs/vlm/vlm.cpp gui/qt/dialogs/vlm/vlm.hpp \
-	gui/qt/maininterface/main_interface.cpp gui/qt/maininterface/main_interface.hpp \
+	gui/qt/maininterface/compositor.hpp \
+	gui/qt/maininterface/compositor.cpp \
+	gui/qt/maininterface/compositor_dummy.hpp \
+	gui/qt/maininterface/compositor_dummy.cpp \
+	gui/qt/maininterface/main_interface.cpp \
+	gui/qt/maininterface/main_interface.hpp \
+	gui/qt/maininterface/mainui.cpp \
+	gui/qt/maininterface/mainui.hpp \
+	gui/qt/maininterface/videosurface.cpp \
+	gui/qt/maininterface/videosurface.hpp \
 	gui/qt/medialibrary/medialib.cpp \
 	gui/qt/medialibrary/medialib.hpp \
 	gui/qt/medialibrary/mlalbum.cpp \
@@ -131,12 +140,15 @@ libqt_plugin_la_SOURCES = \
 	gui/qt/medialibrary/mlartistmodel.hpp \
 	gui/qt/medialibrary/mlbasemodel.cpp \
 	gui/qt/medialibrary/mlbasemodel.hpp \
+	gui/qt/medialibrary/mlbookmarkmodel.cpp \
+	gui/qt/medialibrary/mlbookmarkmodel.hpp \
 	gui/qt/medialibrary/mlfoldersmodel.cpp \
 	gui/qt/medialibrary/mlfoldersmodel.hpp \
 	gui/qt/medialibrary/mlgenre.cpp \
 	gui/qt/medialibrary/mlgenre.hpp \
 	gui/qt/medialibrary/mlgenremodel.cpp \
 	gui/qt/medialibrary/mlgenremodel.hpp \
+	gui/qt/medialibrary/mlhelper.cpp \
 	gui/qt/medialibrary/mlhelper.hpp \
 	gui/qt/medialibrary/mlqmltypes.hpp \
 	gui/qt/medialibrary/mlrecentsvideomodel.cpp \
@@ -197,12 +209,6 @@ libqt_plugin_la_SOURCES = \
 	gui/qt/util/variables.cpp gui/qt/util/variables.hpp \
 	gui/qt/util/vlctick.cpp \
 	gui/qt/util/vlctick.hpp \
-	gui/qt/voutwindow/qvoutwindow.cpp \
-	gui/qt/voutwindow/qvoutwindow.hpp \
-	gui/qt/voutwindow/qvoutwindowdummy.cpp \
-	gui/qt/voutwindow/qvoutwindowdummy.hpp \
-	gui/qt/voutwindow/videosurface.cpp \
-	gui/qt/voutwindow/videosurface.hpp \
 	gui/qt/widgets/native/animators.cpp \
 	gui/qt/widgets/native/animators.hpp \
 	gui/qt/widgets/native/customwidgets.cpp gui/qt/widgets/native/customwidgets.hpp \
@@ -213,7 +219,17 @@ libqt_plugin_la_SOURCES = \
 	gui/qt/widgets/native/searchlineedit.cpp gui/qt/widgets/native/searchlineedit.hpp
 if HAVE_WIN32
 libqt_plugin_la_SOURCES += \
-	gui/qt/maininterface/main_interface_win32.cpp gui/qt/maininterface/main_interface_win32.hpp
+	gui/qt/maininterface/main_interface_win32.cpp \
+	gui/qt/maininterface/main_interface_win32.hpp
+
+if HAVE_DCOMP
+libqt_plugin_la_SOURCES += \
+	gui/qt/maininterface/compositor_dcomp.cpp \
+	gui/qt/maininterface/compositor_dcomp.hpp \
+	gui/qt/maininterface/compositor_dcomp_error.hpp \
+	gui/qt/maininterface/compositor_dcomp_uisurface.cpp \
+	gui/qt/maininterface/compositor_dcomp_uisurface.hpp
+endif
 endif
 
 # Meta-object compilation
@@ -269,7 +285,10 @@ nodist_libqt_plugin_la_SOURCES = \
 	gui/qt/dialogs/sout/sout.moc.cpp \
 	gui/qt/dialogs/sout/sout_widgets.moc.cpp \
 	gui/qt/dialogs/toolbar/toolbareditor.moc.cpp \
+	gui/qt/maininterface/compositor_dummy.moc.cpp \
 	gui/qt/maininterface/main_interface.moc.cpp \
+	gui/qt/maininterface/mainui.moc.cpp \
+	gui/qt/maininterface/videosurface.moc.cpp \
 	gui/qt/medialibrary/medialib.moc.cpp \
 	gui/qt/medialibrary/mlalbum.moc.cpp \
 	gui/qt/medialibrary/mlalbummodel.moc.cpp \
@@ -289,7 +308,6 @@ nodist_libqt_plugin_la_SOURCES = \
 	gui/qt/menus/menus.moc.cpp \
 	gui/qt/network/networkdevicemodel.moc.cpp \
 	gui/qt/network/networkmediamodel.moc.cpp \
-	gui/qt/network/networksourcelistener.moc.cpp \
 	gui/qt/player/input_models.moc.cpp \
 	gui/qt/player/player_controller.moc.cpp \
 	gui/qt/player/playercontrolbarmodel.moc.cpp \
@@ -313,9 +331,6 @@ nodist_libqt_plugin_la_SOURCES = \
 	gui/qt/util/varchoicemodel.moc.cpp \
 	gui/qt/util/variables.moc.cpp \
 	gui/qt/util/vlctick.moc.cpp \
-	gui/qt/voutwindow/qvoutwindow.moc.cpp \
-	gui/qt/voutwindow/qvoutwindowdummy.moc.cpp \
-	gui/qt/voutwindow/videosurface.moc.cpp \
 	gui/qt/widgets/native/animators.moc.cpp \
 	gui/qt/widgets/native/customwidgets.moc.cpp \
 	gui/qt/widgets/native/interface_widgets.moc.cpp \
@@ -323,6 +338,13 @@ nodist_libqt_plugin_la_SOURCES = \
 
 if HAVE_WIN32
 nodist_libqt_plugin_la_SOURCES += gui/qt/maininterface/main_interface_win32.moc.cpp
+
+if HAVE_DCOMP
+nodist_libqt_plugin_la_SOURCES += \
+	gui/qt/maininterface/compositor_dcomp.moc.cpp \
+	gui/qt/maininterface/compositor_dcomp_uisurface.moc.cpp
+endif
+
 endif
 
 nodist_libqt_plugin_la_SOURCES += \
@@ -430,6 +452,7 @@ libqt_plugin_la_RES = \
 	gui/qt/pixmaps/noart_artist_small.svg \
 	gui/qt/pixmaps/pause.svg \
 	gui/qt/pixmaps/play.svg \
+	gui/qt/pixmaps/play_button.svg \
 	gui/qt/pixmaps/playlist/add.svg \
 	gui/qt/pixmaps/playlist/playlist.svg \
 	gui/qt/pixmaps/playlist/remove.svg \
@@ -550,7 +573,10 @@ libqt_plugin_la_RES = \
 	gui/qt/pixmaps/ellipsis.svg \
 	gui/qt/pixmaps/topbar/grid.svg \
 	gui/qt/pixmaps/topbar/list.svg \
-	gui/qt/pixmaps/cone.svg
+	gui/qt/pixmaps/cone.svg \
+	gui/qt/pixmaps/album_cover.svg \
+	gui/qt/pixmaps/back.svg \
+	gui/qt/pixmaps/time.svg
 
 #QML and JS resources
 libqt_plugin_la_QML = \
@@ -573,6 +599,8 @@ libqt_plugin_la_QML = \
 	gui/qt/medialibrary/qml/MusicAlbums.qml \
 	gui/qt/medialibrary/qml/MusicAlbumsDisplay.qml \
 	gui/qt/medialibrary/qml/MusicAlbumsGridExpandDelegate.qml \
+	gui/qt/medialibrary/qml/MusicArtist.qml \
+	gui/qt/medialibrary/qml/MusicArtistsAlbums.qml \
 	gui/qt/medialibrary/qml/MusicArtistsDisplay.qml \
 	gui/qt/medialibrary/qml/MusicDisplay.qml \
 	gui/qt/medialibrary/qml/MusicGenres.qml \
@@ -599,8 +627,8 @@ libqt_plugin_la_QML = \
 	gui/qt/network/qml/NetworkDisplay.qml \
 	gui/qt/network/qml/NetworkGridItem.qml \
 	gui/qt/network/qml/NetworkHomeDisplay.qml \
+	gui/qt/network/qml/NetworkHomeDeviceListView.qml \
 	gui/qt/network/qml/NetworkListItem.qml \
-	gui/qt/network/qml/NetworksSectionSelectableDM.qml \
 	gui/qt/player/qml/ControlBar.qml \
 	gui/qt/player/qml/ControlButtons.qml \
 	gui/qt/player/qml/MiniPlayer.qml \
@@ -615,7 +643,6 @@ libqt_plugin_la_QML = \
 	gui/qt/player/qml/TrackInfo.qml \
 	gui/qt/player/qml/VolumeWidget.qml \
 	gui/qt/playlist/qml/PLItem.qml \
-	gui/qt/playlist/qml/PLItemFooter.qml \
 	gui/qt/playlist/qml/PlaylistListView.qml \
 	gui/qt/playlist/qml/PlaylistMainView.qml \
 	gui/qt/playlist/qml/PlaylistMenu.qml \
@@ -627,6 +654,7 @@ libqt_plugin_la_QML = \
 	gui/qt/util/qml/KeyHelper.js \
 	gui/qt/util/qml/SelectableDelegateModel.qml \
 	gui/qt/widgets/qml/BusyIndicatorExt.qml \
+	gui/qt/widgets/qml/CaptionLabel.qml \
 	gui/qt/widgets/qml/ComboBoxExt.qml \
 	gui/qt/widgets/qml/ContextButton.qml \
 	gui/qt/widgets/qml/DNDLabel.qml \
@@ -634,6 +662,7 @@ libqt_plugin_la_QML = \
 	gui/qt/widgets/qml/ExpandGridView.qml \
 	gui/qt/widgets/qml/FocusBackground.qml \
 	gui/qt/widgets/qml/GridItem.qml \
+	gui/qt/widgets/qml/IconLabel.qml \
 	gui/qt/widgets/qml/IconToolButton.qml \
 	gui/qt/widgets/qml/ImageToolButton.qml \
 	gui/qt/widgets/qml/KeyNavigableGridView.qml \
@@ -641,11 +670,17 @@ libqt_plugin_la_QML = \
 	gui/qt/widgets/qml/KeyNavigableTableView.qml \
 	gui/qt/widgets/qml/LabelSeparator.qml \
 	gui/qt/widgets/qml/ListItem.qml \
+	gui/qt/widgets/qml/ListLabel.qml \
+	gui/qt/widgets/qml/MediaCover.qml \
+	gui/qt/widgets/qml/SubtitleLabel.qml \
+	gui/qt/widgets/qml/MenuCaption.qml \
 	gui/qt/widgets/qml/MenuExt.qml \
 	gui/qt/widgets/qml/MenuItemExt.qml \
+	gui/qt/widgets/qml/MenuLabel.qml \
 	gui/qt/widgets/qml/NavigableCol.qml \
 	gui/qt/widgets/qml/NavigableFocusScope.qml \
 	gui/qt/widgets/qml/NavigableRow.qml \
+	gui/qt/widgets/qml/PlayCover.qml \
 	gui/qt/widgets/qml/RoundButton.qml \
 	gui/qt/widgets/qml/RoundImage.qml \
 	gui/qt/widgets/qml/ScanProgressBar.qml \
@@ -655,10 +690,12 @@ libqt_plugin_la_QML = \
 	gui/qt/widgets/qml/SpinBoxExt.qml \
 	gui/qt/widgets/qml/StackViewExt.qml \
 	gui/qt/widgets/qml/TabButtonExt.qml \
+	gui/qt/widgets/qml/TableColumns.qml \
 	gui/qt/widgets/qml/TextToolButton.qml \
 	gui/qt/widgets/qml/ToolTipArea.qml \
 	gui/qt/widgets/qml/VideoProgressBar.qml \
-	gui/qt/widgets/qml/VideoQualityLabel.qml
+	gui/qt/widgets/qml/VideoQualityLabel.qml \
+	gui/qt/widgets/qml/ListSubtitleLabel.qml
 
 EXTRA_DIST += gui/qt/vlc.qrc $(libqt_plugin_la_RES)
 
@@ -702,7 +739,7 @@ gui/qt/resources.cpp: gui/qt/vlc.qrc $(libqt_plugin_la_RES) $(libqt_plugin_la_QM
 endif
 
 vlc_qt_check_SOURCES = gui/qt/vlc-qt-check.cpp
-vlc_qt_check_CXXFLAGS = $(AM_CXXFLAGS) $(QT_CFLAGS) -fPIC
+vlc_qt_check_CXXFLAGS = $(AM_CXXFLAGS) $(QT_CFLAGS) -fPIC $(CXXFLAGS_qt)
 vlc_qt_check_LDADD = $(QT_LIBS)
 
 if ENABLE_QT

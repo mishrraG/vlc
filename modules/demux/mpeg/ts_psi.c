@@ -739,8 +739,8 @@ static void SetupTTMLExtendedDescriptor( demux_t *p_demux,
     {
         if( i_data <= 1U || i_data <= 1U + p_data[0] )
             goto end;
-        p_data += 1 + p_data[0];
         i_data -= 1 + p_data[0];
+        p_data += 1 + p_data[0];
     }
 
     /* text... finally */
@@ -1279,8 +1279,8 @@ static void PMTSetupEs0x06( demux_t *p_demux, ts_stream_t *p_pes,
             case 0x0F: /* DTS Neural */
                 es_format_Change( p_fmt, AUDIO_ES, VLC_CODEC_DTS );
                 break;
-            case 0x15: /* AC4, unsupported for now */
-                es_format_Change( p_fmt, AUDIO_ES, VLC_FOURCC('A', 'C', '-', '4') );
+            case 0x15: /* Dolby AC-4 */
+                es_format_Change( p_fmt, AUDIO_ES, VLC_CODEC_AC4 );
                 break;
             case 0x20:
                 es_format_Change( p_fmt, SPU_ES, VLC_CODEC_TTML_TS );
@@ -1573,7 +1573,10 @@ static void PIDFillFormat( demux_t *p_demux, ts_stream_t *p_pes,
         break;
     case 0x11:  /* MPEG4 (audio) LATM */
         es_format_Change( fmt, AUDIO_ES, VLC_CODEC_MP4A );
-        fmt->i_original_fourcc = VLC_FOURCC('L','A','T','M');
+        /* https://trac.ffmpeg.org/ticket/320
+         * Haivision's Makito encoder violates mapping by putting ADTS
+           instead of LOAS, we can only hint that's not raw AAC */
+        fmt->i_original_fourcc = VLC_FOURCC('H','E','A','D');
         break;
     case 0x1B:  /* H264 <- check transport syntax/needed descriptor */
         es_format_Change( fmt, VIDEO_ES, VLC_CODEC_H264 );

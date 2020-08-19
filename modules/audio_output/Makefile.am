@@ -62,7 +62,7 @@ endif
 libmmdevice_plugin_la_SOURCES = audio_output/mmdevice.c audio_output/mmdevice.h
 libmmdevice_plugin_la_LIBADD = $(LIBCOM) $(LIBM)
 libwinstore_plugin_la_SOURCES = audio_output/winstore.c audio_output/mmdevice.h
-libwinstore_plugin_la_LIBADD = $(LIBCOM)
+libwinstore_plugin_la_LIBADD = $(LIBCOM) -lmmdevapi
 libwasapi_plugin_la_SOURCES = audio_output/wasapi.c
 libwasapi_plugin_la_LIBADD = $(LIBCOM) -lksuser
 if HAVE_WASAPI
@@ -110,7 +110,7 @@ endif
 libaudiounit_ios_plugin_la_SOURCES = audio_output/audiounit_ios.m \
 	audio_output/coreaudio_common.c audio_output/coreaudio_common.h
 libaudiounit_ios_plugin_la_LDFLAGS = $(AM_LDFLAGS) -rpath '$(aoutdir)' \
-	-Wl,-framework,CoreAudio,-framework,AudioUnit,-framework,AudioToolbox,-framework,CoreServices,-framework,UIKit,-framework,AVFoundation
+	-Wl,-framework,Foundation,-framework,CoreAudio,-framework,AudioToolbox,-framework,UIKit,-framework,AVFoundation
 if HAVE_IOS
 aout_LTLIBRARIES += libaudiounit_ios_plugin.la
 endif

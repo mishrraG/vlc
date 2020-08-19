@@ -693,7 +693,23 @@ static bo_t *GetESDS(mp4mux_trackinfo_t *p_track)
     return esds;
 }
 
-static bo_t *GetWaveTag(mp4mux_trackinfo_t *p_track)
+static bo_t *GetEndaTag(bool b_le)
+{
+    bo_t *enda = box_new("enda");
+    if(enda)
+        bo_add_16be(enda, !!b_le);
+    return enda;
+}
+
+static bo_t *GetFrmaTag(const char format[4])
+{
+    bo_t *frma = box_new("frma");
+    if(frma)
+        bo_add_mem(frma, 4, format);
+    return frma;
+}
+
+static bo_t *GetWaveTag(const char *fcc, bo_t *extraboxes[], size_t i_extraboxes)
 {
     bo_t *wave;
     bo_t *box;
@@ -701,31 +717,13 @@ static bo_t *GetWaveTag(mp4mux_trackinfo_t *p_track)
     wave = box_new("wave");
     if(wave)
     {
-        box = box_new("frma");
-        if(box)
-        {
-            bo_add_fourcc(box, "mp4a");
-            box_gather(wave, box);
-        }
-
-        box = box_new("mp4a");
-        if(box)
-        {
-            bo_add_32be(box, 0);
-            box_gather(wave, box);
-        }
-
-        box = GetESDS(p_track);
+        box = GetFrmaTag(fcc);
         box_gather(wave, box);
 
-        box = box_new("srcq");
-        if(box)
-        {
-            bo_add_32be(box, 0x40);
-            box_gather(wave, box);
-        }
+        for(size_t i=0; i<i_extraboxes; i++)
+            box_gather(wave, extraboxes[i]);
 
-        /* wazza ? */
+        /* The last atom in the siDecompressionParam atom must be a terminator atom. */
         bo_add_32be(wave, 8); /* new empty box */
         bo_add_32be(wave, 0); /* box label */
     }
@@ -1104,31 +1102,154 @@ static bo_t *GetUdtaTag(mp4mux_handle_t *muxh)
     return udta;
 }
 
+static bo_t *GetSratBox(uint32_t i_sample_rate)
+{
+    bo_t *srat = box_full_new("srat", 0, 0);
+    if(srat)
+        bo_add_32be(srat, i_sample_rate);
+    return srat;
+}
+
 static bo_t *GetSounBox(vlc_object_t *p_obj, mp4mux_trackinfo_t *p_track, bool b_mov)
 {
     VLC_UNUSED(p_obj);
 
-    bool b_descr = true;
-    vlc_fourcc_t codec = p_track->fmt.i_codec;
+    bool b_descr = false;
+    const vlc_fourcc_t codec = p_track->fmt.i_codec;
+    const audio_format_t *afmt = &p_track->fmt.audio;
     char fcc[4];
+    bo_t *specificbox = NULL;
+    uint16_t i_qt_version = 1;
+    uint16_t i_compression_id = -2;
+    uint32_t i_uncompressed_bps = 0;
+    bo_t *srat = NULL;
 
-    if (codec == VLC_CODEC_MPGA ||
-        codec == VLC_CODEC_MP3) {
-        if (b_mov) {
-            b_descr = false;
-            memcpy(fcc, ".mp3", 4);
-        } else
+    /* codec specific extradata */
+    const uint8_t *p_extradata = p_track->fmt.p_extra;
+    size_t i_extradata = p_track->fmt.i_extra;
+    if(p_track->sample_priv.i_data)
+    {
+        p_extradata = p_track->sample_priv.p_data;
+        i_extradata = p_track->sample_priv.i_data;
+    }
+
+    switch(codec)
+    {
+        case VLC_CODEC_A52:
+            memcpy(fcc, "ac-3", 4);
+            if(i_extradata >= 3)
+            {
+                specificbox = GetxxxxTag(p_extradata, i_extradata, "dac3");
+                if(b_mov)
+                    specificbox = GetWaveTag(fcc, &specificbox, 1);
+            }
+            break;
+        case VLC_CODEC_AMR_NB:
+            memcpy(fcc, "samr", 4);
+            specificbox = GetDamrTag(&p_track->fmt);
+            if(b_mov)
+                specificbox = GetWaveTag(fcc, &specificbox, 1);
+            break;
+        case VLC_CODEC_DTS:
+            if(b_mov)
+            {
+                memcpy(fcc, "dtsc", 4);
+            } else {
+                memcpy(fcc, "mp4a", 4);
+                b_descr = true;
+            }
+            break;
+        case VLC_CODEC_EAC3:
+            memcpy(fcc, "ec-3", 4);
+            if(i_extradata >= 5)
+            {
+                specificbox = GetxxxxTag(p_extradata, i_extradata, "dec3");
+                if(b_mov)
+                    specificbox = GetWaveTag(fcc, &specificbox, 1);
+            }
+            break;
+        case VLC_CODEC_MP4A:
             memcpy(fcc, "mp4a", 4);
-    } else if (codec == VLC_CODEC_A52) {
-        memcpy(fcc, "ac-3", 4);
-    } else if (codec == VLC_CODEC_EAC3) {
-        memcpy(fcc, "ec-3", 4);
-    } else if (codec == VLC_CODEC_DTS) {
-        memcpy(fcc, "DTS ", 4);
-    } else if (codec == VLC_CODEC_WMAP) {
-        memcpy(fcc, "wma ", 4);
-    } else
-        vlc_fourcc_to_char(codec, fcc);
+            if(b_mov)
+            {
+                bo_t *extraboxes[2] = {NULL};
+                extraboxes[0] = box_new("mp4a");
+                if(extraboxes[0])
+                    bo_add_32be(extraboxes[0], 0);
+                extraboxes[1] = GetESDS(p_track);
+                specificbox = GetWaveTag("mp4a", extraboxes, 2);
+            } else b_descr = true;
+            break;
+        case VLC_CODEC_MPGA:
+        case VLC_CODEC_MP3:
+            if (b_mov) {
+                /* mpeg audio in mov */
+                memcpy(fcc, ".mp3", 4);
+                i_qt_version = 0;
+            } else {
+                memcpy(fcc, "mp4a", 4);
+                b_descr = true;
+            }
+            break;
+        case VLC_CODEC_WMAP:
+            memcpy(fcc, "wma ", 4);
+            specificbox = GetWaveFormatExTag(&p_track->fmt, "wfex");
+            break;
+        // v0 only Qt codecs
+        case VLC_CODEC_U8:
+            i_uncompressed_bps = 8;
+            i_qt_version = 0;
+            memcpy(fcc, "raw ", 4);
+            break;
+        case VLC_CODEC_ALAW:
+            i_qt_version = 0;
+            memcpy(fcc, "alaw", 4);
+            break;
+        case VLC_CODEC_MULAW:
+            i_qt_version = 0;
+            memcpy(fcc, "ulaw", 4);
+            break;
+        case VLC_CODEC_S16B:
+            i_uncompressed_bps = 16;
+            i_qt_version = 0;
+            memcpy(fcc, "twos", 4);
+            break;
+        // v1
+        case VLC_CODEC_S16L:
+            i_uncompressed_bps = 16;
+            memcpy(fcc, "sowt", 4);
+            break;
+        case VLC_CODEC_S24B: /* only v1 uncompressed audio */
+        case VLC_CODEC_S24L:
+        case VLC_CODEC_S32B:
+        case VLC_CODEC_S32L:
+        case VLC_CODEC_F32B:
+        case VLC_CODEC_F32L:
+        case VLC_CODEC_F64B:
+        case VLC_CODEC_F64L:
+        {
+            i_uncompressed_bps = aout_BitsPerSample(codec);
+            const char * uncompressedcc;
+            if(i_uncompressed_bps <= 32)
+            {
+                if(i_uncompressed_bps == 24)
+                    uncompressedcc = "in24";
+                else if((VLC_FOURCC('f',0,0,0) & codec) != VLC_FOURCC('f',0,0,0))
+                    uncompressedcc = "in32";
+                else
+                    uncompressedcc = "fl32";
+            }
+            else uncompressedcc = "fl64";
+            memcpy(fcc, uncompressedcc, 4);
+            const bool b_le = ((codec & VLC_FOURCC(0,0,0,'b')) != VLC_FOURCC(0,0,0,'b'));
+            bo_t *extraboxes[1] = { GetEndaTag(b_le) };
+            specificbox = GetWaveTag(fcc, extraboxes, 1);
+            break;
+        }
+        default:
+            vlc_fourcc_to_char(codec, fcc);
+            break;
+    }
 
     bo_t *soun = box_new(fcc);
     if(!soun)
@@ -1138,61 +1259,60 @@ static bo_t *GetSounBox(vlc_object_t *p_obj, mp4mux_trackinfo_t *p_track, bool b
     bo_add_16be(soun, 1);         // data-reference-index
 
     /* SoundDescription */
-    if (b_mov && codec == VLC_CODEC_MP4A)
-        bo_add_16be(soun, 1);     // version 1;
-    else
-        bo_add_16be(soun, 0);     // version 0;
+    bo_add_16be(soun, i_qt_version);
     bo_add_16be(soun, 0);         // revision level (0)
     bo_add_32be(soun, 0);         // vendor
     // channel-count
-    bo_add_16be(soun, p_track->fmt.audio.i_channels);
+    if(i_qt_version == 0 && afmt->i_channels == 1)
+        bo_add_16be(soun, 1);
+    else
+        bo_add_16be(soun, 2);
     // sample size
-    bo_add_16be(soun, p_track->fmt.audio.i_bitspersample ?
-                 p_track->fmt.audio.i_bitspersample : 16);
-    bo_add_16be(soun, -2);        // compression id
+    if(i_qt_version == 0 && i_uncompressed_bps == 8)
+        bo_add_16be(soun, 8);
+    else
+        bo_add_16be(soun, 16);
+    // compression id
+    if(!b_mov)
+        bo_add_16be(soun, 0);
+    else
+        bo_add_16be(soun, i_compression_id);
     bo_add_16be(soun, 0);         // packet size (0)
-    bo_add_16be(soun, p_track->fmt.audio.i_rate); // sampleratehi
-    bo_add_16be(soun, 0);                             // sampleratelo
+
+    if(!b_mov && i_qt_version > 0 &&
+       p_track->fmt.audio.i_rate >= (1<<16))
+    {
+        bo_add_32be(soun, 1<<16);
+        srat = GetSratBox(p_track->fmt.audio.i_rate);
+    }
+    else
+    {
+        bo_add_16be(soun, p_track->fmt.audio.i_rate); // sampleratehi
+        bo_add_16be(soun, 0);                         // sampleratelo
+    }
 
     /* Extended data for SoundDescription V1 */
-    if (b_mov && p_track->fmt.i_codec == VLC_CODEC_MP4A) {
-        /* samples per packet */
-        bo_add_32be(soun, p_track->fmt.audio.i_frame_length);
-        bo_add_32be(soun, 1536); /* bytes per packet */
-        bo_add_32be(soun, 2);    /* bytes per frame */
-        /* bytes per sample */
-        bo_add_32be(soun, 2 /*p_fmt->audio.i_bitspersample/8 */);
+    if (i_qt_version == 1)
+    {
+        const uint32_t i_samples_per_packet = (i_uncompressed_bps && i_uncompressed_bps < 16)
+                                            ? 1
+                                            : afmt->i_frame_length;
+        const uint32_t i_bytes_per_packet = afmt->i_channels
+                                          ? afmt->i_frame_length / afmt->i_channels
+                                          : 0;
+        bo_add_32be(soun, i_samples_per_packet);
+        bo_add_32be(soun, i_bytes_per_packet);
+        bo_add_32be(soun, p_track->fmt.audio.i_bytes_per_frame); /* bytes per frame */
+        bo_add_32be(soun, 2); /* bytes per sample */
     }
+
+    box_gather(soun, specificbox);
 
     /* Add an ES Descriptor */
-    if (b_descr) {
-        bo_t *box;
+    if (b_descr)
+       box_gather(soun, GetESDS(p_track));
 
-        /* codec specific extradata */
-        const uint8_t *p_extradata = p_track->fmt.p_extra;
-        size_t i_extradata = p_track->fmt.i_extra;
-        if(p_track->sample_priv.i_data)
-        {
-            p_extradata = p_track->sample_priv.p_data;
-            i_extradata = p_track->sample_priv.i_data;
-        }
-
-        if (b_mov && codec == VLC_CODEC_MP4A)
-            box = GetWaveTag(p_track);
-        else if (codec == VLC_CODEC_AMR_NB)
-            box = GetDamrTag(&p_track->fmt);
-        else if (codec == VLC_CODEC_A52 && i_extradata >= 3)
-            box = GetxxxxTag(p_extradata, i_extradata, "dac3");
-        else if (codec == VLC_CODEC_EAC3 && i_extradata >= 5)
-            box = GetxxxxTag(p_extradata, i_extradata, "dec3");
-        else if (codec == VLC_CODEC_WMAP)
-            box = GetWaveFormatExTag(&p_track->fmt, "wfex");
-        else
-            box = GetESDS(p_track);
-
-        if (box)
-            box_gather(soun, box);
-    }
+    box_gather(soun, srat);
 
     return soun;
 }
@@ -2193,6 +2313,20 @@ bool mp4mux_CanMux(vlc_object_t *p_obj, const es_format_t *p_fmt,
 {
     switch(p_fmt->i_codec)
     {
+    case VLC_CODEC_U8:
+    case VLC_CODEC_S16L:
+    case VLC_CODEC_S16B:
+    case VLC_CODEC_S24L:
+    case VLC_CODEC_S24B:
+    case VLC_CODEC_S32L:
+    case VLC_CODEC_S32B:
+    case VLC_CODEC_F32L:
+    case VLC_CODEC_F32B:
+    case VLC_CODEC_F64L:
+    case VLC_CODEC_F64B:
+    case VLC_CODEC_MULAW:
+    case VLC_CODEC_ALAW:
+
     case VLC_CODEC_A52:
     case VLC_CODEC_DTS:
     case VLC_CODEC_EAC3:

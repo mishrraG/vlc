@@ -209,14 +209,7 @@ static picture_t *AllocPicture( filter_t *p_filter )
     if (unlikely(cfg == NULL))
         return NULL;
 
-    picture_t *pic = D3D11_AllocPicture(VLC_OBJECT(p_filter), &p_filter->fmt_out.video, p_filter->vctx_out, cfg);
-    if (unlikely(pic == NULL))
-        return NULL;
-
-    struct d3d11_pic_context *pic_ctx = container_of(pic->context, struct d3d11_pic_context, s);
-    D3D11_AllocateResourceView(p_filter, p_sys->d3d_dev->d3ddevice, cfg, pic_ctx->picsys.texture, 0, pic_ctx->picsys.renderSrc);
-
-    return pic;
+    return D3D11_AllocPicture(VLC_OBJECT(p_filter), &p_filter->fmt_out.video, p_filter->vctx_out, cfg);
 }
 
 static picture_t *Filter(filter_t *p_filter, picture_t *p_pic)
@@ -364,6 +357,8 @@ static int D3D11OpenAdjust(vlc_object_t *obj)
     d3d11_decoder_device_t *dev_sys = GetD3D11OpaqueContext( filter->vctx_in );
     sys->d3d_dev = &dev_sys->d3d_dev;
     DXGI_FORMAT format = vtcx_sys->format;
+
+    d3d11_device_lock(sys->d3d_dev);
 
     if (D3D11_CreateProcessor(filter, sys->d3d_dev, D3D11_VIDEO_FRAME_FORMAT_PROGRESSIVE,
                               &filter->fmt_out.video, &filter->fmt_out.video, &sys->d3d_proc) != VLC_SUCCESS)
@@ -516,6 +511,7 @@ static int D3D11OpenAdjust(vlc_object_t *obj)
     filter->pf_video_filter = Filter;
     filter->p_sys = sys;
     filter->vctx_out = vlc_video_context_Hold(filter->vctx_in);
+    d3d11_device_unlock(sys->d3d_dev);
 
     return VLC_SUCCESS;
 error:
@@ -532,6 +528,7 @@ error:
     if (sys->out[1].texture)
         ID3D11Texture2D_Release(sys->out[1].texture);
     D3D11_ReleaseProcessor(&sys->d3d_proc);
+    d3d11_device_unlock(sys->d3d_dev);
     free(sys);
 
     return VLC_EGENERIC;

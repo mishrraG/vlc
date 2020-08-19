@@ -199,7 +199,7 @@ libmkv_plugin_la_SOURCES = \
 	demux/mkv/stream_io_callback.hpp demux/mkv/stream_io_callback.cpp \
 	demux/mp4/libmp4.c demux/vobsub.h \
 	demux/mkv/mkv.hpp demux/mkv/mkv.cpp \
-        demux/av1_unpack.h \
+        demux/av1_unpack.h codec/webvtt/helpers.h \
 	demux/windows_audio_commons.h
 libmkv_plugin_la_SOURCES += packetizer/dts_header.h packetizer/dts_header.c
 libmkv_plugin_la_CPPFLAGS = $(AM_CPPFLAGS) $(CFLAGS_mkv)
@@ -353,6 +353,8 @@ libadaptive_plugin_la_SOURCES = \
     demux/adaptive/logic/RateBasedAdaptationLogic.cpp \
     demux/adaptive/logic/Representationselectors.hpp \
     demux/adaptive/logic/Representationselectors.cpp \
+    demux/adaptive/logic/RoundRobinLogic.cpp \
+    demux/adaptive/logic/RoundRobinLogic.hpp \
     demux/adaptive/mp4/AtomsReader.cpp \
     demux/adaptive/mp4/AtomsReader.hpp \
     demux/adaptive/http/AuthStorage.cpp \
@@ -507,4 +509,4 @@ demux_LTLIBRARIES += libnoseek_plugin.la
 
 libdemux_mock_plugin_la_SOURCES = demux/mock.c
 libdemux_mock_plugin_la_LDFLAGS = $(AM_LDFLAGS) -rpath '$(demuxdir)'
-check_LTLIBRARIES += libdemux_mock_plugin.la
+noinst_LTLIBRARIES += libdemux_mock_plugin.la

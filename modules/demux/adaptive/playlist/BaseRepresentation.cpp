@@ -88,7 +88,7 @@ void BaseRepresentation::addCodecs(const std::string &s)
     }
 }
 
-bool BaseRepresentation::needsUpdate() const
+bool BaseRepresentation::needsUpdate(uint64_t) const
 {
     return false;
 }
@@ -98,7 +98,7 @@ bool BaseRepresentation::runLocalUpdates(SharedResources *)
     return false;
 }
 
-void BaseRepresentation::scheduleNextUpdate(uint64_t)
+void BaseRepresentation::scheduleNextUpdate(uint64_t, bool)
 {
 
 }

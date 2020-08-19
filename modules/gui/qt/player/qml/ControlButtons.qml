@@ -321,8 +321,8 @@ Item{
             size: VLCStyle.icon_medium
             iconText: VLCIcons.playlist
             onClicked: {
-                rootWindow.playlistVisible = !rootWindow.playlistVisible
-                if (rootWindow.playlistVisible && rootWindow.playlistDocked) {
+                mainInterface.playlistVisible = !mainInterface.playlistVisible
+                if (mainInterface.playlistVisible && mainInterface.playlistDocked) {
                     playlistWidget.gainFocus(playlistBtn)
                 }
             }
@@ -417,8 +417,9 @@ Item{
         Widgets.IconToolButton{
             id: fullScreenBtn
             size: VLCStyle.icon_medium
-            iconText: rootWindow.interfaceFullScreen ?VLCIcons.defullscreen :VLCIcons.fullscreen
-            onClicked: rootWindow.interfaceFullScreen = !rootWindow.interfaceFullScreen
+            enabled: !paintOnly && player.hasVideoOutput
+            iconText: player.fullscreen ? VLCIcons.defullscreen :VLCIcons.fullscreen
+            onClicked: player.fullscreen = !player.fullscreen
             property bool acceptFocus: true
             text: i18n.qtr("fullscreen")
         }
@@ -596,7 +597,7 @@ Item{
             id: quitBtn
             size: VLCStyle.icon_medium
             iconText: VLCIcons.clear
-            onClicked: rootWindow.close()
+            onClicked: mainInterface.close()
             property bool acceptFocus: true
             text: i18n.qtr("Quit")
         }

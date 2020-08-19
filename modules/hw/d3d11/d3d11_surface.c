@@ -83,6 +83,8 @@ static int SetupProcessor(filter_t *p_filter, d3d11_device_t *d3d_dev,
     filter_sys_t *sys = p_filter->p_sys;
     HRESULT hr;
 
+    d3d11_device_lock(d3d_dev);
+
     if (D3D11_CreateProcessor(p_filter, d3d_dev, D3D11_VIDEO_FRAME_FORMAT_PROGRESSIVE,
                               &p_filter->fmt_in.video, &p_filter->fmt_out.video, &sys->d3d_proc) != VLC_SUCCESS)
         goto error;
@@ -123,6 +125,7 @@ static int SetupProcessor(filter_t *p_filter, d3d11_device_t *d3d_dev,
                 msg_Err(p_filter, "Failed to create the processor output. (hr=0x%lX)", hr);
             else
             {
+                d3d11_device_unlock(d3d_dev);
                 return VLC_SUCCESS;
             }
         }
@@ -135,6 +138,7 @@ static int SetupProcessor(filter_t *p_filter, d3d11_device_t *d3d_dev,
 
 error:
     D3D11_ReleaseProcessor(&sys->d3d_proc);
+    d3d11_device_unlock(d3d_dev);
     return VLC_EGENERIC;
 }
 #endif
@@ -587,10 +591,9 @@ VIDEO_FILTER_WRAPPER (D3D11_NV12)
 VIDEO_FILTER_WRAPPER (D3D11_YUY2)
 VIDEO_FILTER_WRAPPER (D3D11_RGBA)
 
-static picture_t *AllocateCPUtoGPUTexture(filter_t *p_filter)
+static picture_t *AllocateCPUtoGPUTexture(filter_t *p_filter, filter_sys_t *p_sys)
 {
     video_format_t fmt_staging;
-    filter_sys_t *p_sys = p_filter->p_sys;
 
     d3d11_video_context_t *vctx_sys = GetD3D11ContextPrivate( p_filter->vctx_out );
 
@@ -615,14 +618,15 @@ static picture_t *AllocateCPUtoGPUTexture(filter_t *p_filter)
     video_format_Copy(&fmt_staging, &p_filter->fmt_out.video);
     fmt_staging.i_chroma = cfg->fourcc;
 
-    picture_t *p_dst = picture_NewFromFormat(&fmt_staging);
+    picture_resource_t dummy_res = {};
+    picture_t *p_dst = picture_NewFromResource(&fmt_staging, &dummy_res);
     if (p_dst == NULL) {
         msg_Err(p_filter, "Failed to map create the temporary picture.");
         goto done;
     }
 
     if (AllocateTextures(p_filter, p_sys->d3d_dev, cfg,
-                         &p_dst->format, 1, pic_ctx->picsys.texture, p_dst->p) != VLC_SUCCESS)
+                         &p_dst->format, pic_ctx->picsys.texture, p_dst->p) != VLC_SUCCESS)
         goto done;
 
     if (unlikely(D3D11_AllocateResourceView(p_filter, p_sys->d3d_dev->d3ddevice, cfg,
@@ -646,7 +650,7 @@ done:
 
 static picture_t *NV12_D3D11_Filter( filter_t *p_filter, picture_t *p_pic )
 {
-    picture_t *p_outpic = AllocateCPUtoGPUTexture( p_filter );
+    picture_t *p_outpic = AllocateCPUtoGPUTexture( p_filter, p_filter->p_sys );
     if( p_outpic )
     {
         NV12_D3D11( p_filter, p_pic, p_outpic );
@@ -801,7 +805,7 @@ int D3D11OpenCPUConverter( vlc_object_t *obj )
 
     if ( p_filter->fmt_in.video.i_chroma != d3d_fourcc )
     {
-        p_sys->staging_pic = AllocateCPUtoGPUTexture(p_filter);
+        p_sys->staging_pic = AllocateCPUtoGPUTexture(p_filter, p_sys);
         if (p_sys->staging_pic == NULL)
             goto done;
 
@@ -813,6 +817,7 @@ int D3D11OpenCPUConverter( vlc_object_t *obj )
         }
     }
 
+    p_filter->p_sys = p_sys;
     err = VLC_SUCCESS;
 
 done:

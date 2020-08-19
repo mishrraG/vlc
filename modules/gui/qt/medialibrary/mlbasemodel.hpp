@@ -51,12 +51,20 @@ public:
 
     Q_PROPERTY( Qt::SortOrder sortOrder READ getSortOrder WRITE setSortOder NOTIFY sortOrderChanged )
     Q_PROPERTY( QString sortCriteria READ getSortCriteria WRITE setSortCriteria NOTIFY sortCriteriaChanged RESET unsetSortCriteria )
+    Q_PROPERTY( unsigned int count READ getCount NOTIFY countChanged )
+
+    Q_INVOKABLE virtual QVariant getIdForIndex( QVariant index) const = 0;
+    Q_INVOKABLE virtual QVariantList getIdsForIndexes( QVariantList indexes ) const = 0;
+    Q_INVOKABLE virtual QVariantList getIdsForIndexes( QModelIndexList indexes ) const = 0;
+
+    Q_INVOKABLE QMap<QString, QVariant> getDataAt(int index);
 
 signals:
     void parentIdChanged();
     void resetRequested();
     void sortOrderChanged();
     void sortCriteriaChanged();
+    void countChanged(unsigned int) const;
 
 protected slots:
     void onResetRequested();
@@ -67,6 +75,7 @@ private:
 protected:
     virtual void clear() = 0;
     virtual vlc_ml_sorting_criteria_t roleToCriteria(int role) const = 0;
+    static QString getFirstSymbol(QString str);
     virtual vlc_ml_sorting_criteria_t nameToCriteria(QByteArray) const {
         return VLC_ML_SORTING_DEFAULT;
     }
@@ -90,6 +99,8 @@ protected:
     const QString getSortCriteria() const;
     void setSortCriteria(const QString& criteria);
     void unsetSortCriteria();
+
+    virtual unsigned int getCount() const = 0;
 
     virtual void onVlcMlEvent( const vlc_ml_event_t* event );
 
@@ -133,15 +144,21 @@ public:
 
     int rowCount(const QModelIndex &parent) const override
     {
+        bool countHasChanged = false;
         if (parent.isValid())
             return 0;
-        vlc_mutex_locker lock( &m_item_lock );
-        if ( m_initialized == false )
         {
-            m_item_list = const_cast<MLSlidingWindowModel<T>*>(this)->fetch();
-            m_total_count = countTotalElements();
-            m_initialized = true;
+            vlc_mutex_locker lock( &m_item_lock );
+            if ( m_initialized == false )
+            {
+                m_item_list = const_cast<MLSlidingWindowModel<T>*>(this)->fetch();
+                m_total_count = countTotalElements();
+                m_initialized = true;
+                countHasChanged = true;
+            }
         }
+        if (countHasChanged)
+            emit countChanged( static_cast<unsigned int>(m_total_count) );
         return m_total_count;
     }
 
@@ -156,11 +173,69 @@ public:
 
     void clear() override
     {
+        {
+            vlc_mutex_locker lock( &m_item_lock );
+            m_query_param.i_offset = 0;
+            m_initialized = false;
+            m_total_count = 0;
+            m_item_list.clear();
+        }
+        emit countChanged( static_cast<unsigned int>(m_total_count) );
+    }
+
+
+    virtual QVariant getIdForIndex( QVariant index ) const override
+    {
         vlc_mutex_locker lock( &m_item_lock );
-        m_query_param.i_offset = 0;
-        m_initialized = false;
-        m_total_count = 0;
-        m_item_list.clear();
+        T* obj = nullptr;
+        if (index.canConvert<int>())
+            obj = item( index.toInt() );
+        else if ( index.canConvert<QModelIndex>() )
+            obj = item( index.value<QModelIndex>().row() );
+
+        if (!obj)
+            return {};
+
+        return QVariant::fromValue(obj->getId());
+    }
+
+    virtual QVariantList getIdsForIndexes( QModelIndexList indexes ) const override
+    {
+        QVariantList idList;
+        idList.reserve(indexes.length());
+        vlc_mutex_locker lock( &m_item_lock );
+        std::transform( indexes.begin(), indexes.end(),std::back_inserter(idList), [this](const QModelIndex& index) -> QVariant {
+            T* obj = item( index.row() );
+            if (!obj)
+                return {};
+            return QVariant::fromValue(obj->getId());
+        });
+        return idList;
+    }
+
+    virtual QVariantList getIdsForIndexes( QVariantList indexes ) const override
+    {
+        QVariantList idList;
+
+        idList.reserve(indexes.length());
+        vlc_mutex_locker lock( &m_item_lock );
+        std::transform( indexes.begin(), indexes.end(),std::back_inserter(idList), [this](const QVariant& index) -> QVariant {
+            T* obj = nullptr;
+            if (index.canConvert<int>())
+                obj = item( index.toInt() );
+            else if ( index.canConvert<QModelIndex>() )
+                obj = item( index.value<QModelIndex>().row() );
+
+            if (!obj)
+                return {};
+
+            return QVariant::fromValue(obj->getId());
+        });
+        return idList;
+    }
+
+    unsigned int getCount() const override {
+        return static_cast<unsigned int>(m_total_count);
     }
 
 protected:
@@ -173,6 +248,7 @@ protected:
             if ( m_total_count > 0 )
                 m_item_list = const_cast<MLSlidingWindowModel<T>*>(this)->fetch();
             m_initialized = true;
+            emit countChanged( static_cast<unsigned int>(m_total_count) );
         }
 
         if ( m_total_count == 0 || idx >= m_total_count || idx < 0 )

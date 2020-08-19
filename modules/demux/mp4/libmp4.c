@@ -369,8 +369,7 @@ static int MP4_PeekBoxHeader( stream_t *p_stream, MP4_Box_t *p_box )
  * on success, position is past read box or EOF
  *****************************************************************************/
 static MP4_Box_t *MP4_ReadBoxRestricted( stream_t *p_stream, MP4_Box_t *p_father,
-                                         const uint32_t onlytypes[], const uint32_t nottypes[],
-                                         bool *pb_restrictionhit )
+                                         const uint32_t stopbefore[], bool *pb_restrictionhit )
 {
     MP4_Box_t peekbox = { 0 };
     if ( !MP4_PeekBoxHeader( p_stream, &peekbox ) )
@@ -383,18 +382,9 @@ static MP4_Box_t *MP4_ReadBoxRestricted( stream_t *p_stream, MP4_Box_t *p_father
         return NULL;
     }
 
-    for( size_t i=0; nottypes && nottypes[i]; i++ )
+    for( size_t i=0; stopbefore && stopbefore[i]; i++ )
     {
-        if( nottypes[i] == peekbox.i_type )
-        {
-            *pb_restrictionhit = true;
-            return NULL;
-        }
-    }
-
-    for( size_t i=0; onlytypes && onlytypes[i]; i++ )
-    {
-        if( onlytypes[i] != peekbox.i_type )
+        if( stopbefore[i] == peekbox.i_type )
         {
             *pb_restrictionhit = true;
             return NULL;
@@ -493,7 +483,7 @@ static int MP4_ReadBoxContainerChildrenIndexed( stream_t *p_stream,
             i_index = GetDWBE(&read[4]);
         }
         b_onexclude = false; /* If stopped due exclude list */
-        if( (p_box = MP4_ReadBoxRestricted( p_stream, p_container, NULL, excludelist, &b_onexclude )) )
+        if( (p_box = MP4_ReadBoxRestricted( p_stream, p_container, excludelist, &b_onexclude )) )
         {
             b_continue = true;
             p_box->i_index = i_index;
@@ -2345,6 +2335,21 @@ static int MP4_ReadBox_stsdext_chan( stream_t *p_stream, MP4_Box_t *p_box )
              p_chan->i_channels_flags, p_chan->layout.i_channels_layout_tag,
              p_chan->layout.i_channels_bitmap, p_chan->layout.i_channels_description_count );
 #endif
+    MP4_READBOX_EXIT( 1 );
+}
+
+static int MP4_ReadBox_stsdext_srat( stream_t *p_stream, MP4_Box_t *p_box )
+{
+    MP4_READBOX_ENTER( MP4_Box_data_srat_t, NULL );
+    MP4_Box_data_srat_t *p_srat = p_box->data.p_srat;
+    if ( i_read != 8 )
+        MP4_READBOX_EXIT( 0 );
+
+    uint32_t i_dummy;
+    VLC_UNUSED( i_dummy );
+    MP4_GET4BYTES( i_dummy ); /* version flags */
+    MP4_GET4BYTES( p_srat->i_sample_rate );
+
     MP4_READBOX_EXIT( 1 );
 }
 
@@ -4487,20 +4492,20 @@ static int MP4_ReadBox_iloc( stream_t *p_stream, MP4_Box_t *p_box )
                 {
                     case 4: MP4_GET4BYTES( p_data->p_items[i].p_extents[j].i_extent_index ); break;
                     case 8: MP4_GET8BYTES( p_data->p_items[i].p_extents[j].i_extent_index ); break;
-                    default: break;
+                    default: p_data->p_items[i].p_extents[j].i_extent_index = 0 ; break;
                 }
             }
             switch( p_data->i_offset_size )
             {
                 case 4: MP4_GET4BYTES( p_data->p_items[i].p_extents[j].i_extent_offset ); break;
                 case 8: MP4_GET8BYTES( p_data->p_items[i].p_extents[j].i_extent_offset ); break;
-                default: break;
+                default: p_data->p_items[i].p_extents[j].i_extent_offset = 0; break;
             }
             switch( p_data->i_length_size )
             {
                 case 4: MP4_GET4BYTES( p_data->p_items[i].p_extents[j].i_extent_length ); break;
                 case 8: MP4_GET8BYTES( p_data->p_items[i].p_extents[j].i_extent_length ); break;
-                default: break;
+                default: p_data->p_items[i].p_extents[j].i_extent_length = 0; break;
             }
         }
     }
@@ -4926,6 +4931,7 @@ static const struct
 
     /* Sound extensions */
     { ATOM_chan,    MP4_ReadBox_stsdext_chan, 0 },
+    { ATOM_srat,    MP4_ReadBox_stsdext_srat, 0 },
     { ATOM_WMA2,    MP4_ReadBox_WMA2,         ATOM_wave }, /* flip4mac */
     { ATOM_dOps,    MP4_ReadBox_Binary,       ATOM_Opus },
     { ATOM_wfex,    MP4_ReadBox_WMA2,         ATOM_wma  }, /* ismv formatex */

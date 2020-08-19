@@ -51,7 +51,7 @@
 # include <sys/uio.h>
 #endif
 
-#ifdef HAVE_POLL
+#ifdef HAVE_POLL_H
 # include <poll.h>
 #endif
 
@@ -1279,11 +1279,10 @@ msg_type[] =
     { "GET",           HTTPD_MSG_GET,          HTTPD_PROTO_HTTP },
     { "HEAD",          HTTPD_MSG_HEAD,         HTTPD_PROTO_HTTP },
     { "POST",          HTTPD_MSG_POST,         HTTPD_PROTO_HTTP },
-    { "",              HTTPD_MSG_NONE,         HTTPD_PROTO_NONE }
 };
 
 
-static void httpd_ClientRecv(httpd_client_t *cl)
+static int httpd_ClientRecv(httpd_client_t *cl)
 {
     int i_len;
 
@@ -1423,16 +1422,12 @@ static void httpd_ClientRecv(httpd_client_t *cl)
                 p = NULL;
                 cl->query.i_type = HTTPD_MSG_NONE;
 
-                for (unsigned i = 0; msg_type[i].name[0]; i++)
-                    if (!strncmp((char *)cl->p_buffer, msg_type[i].name,
-                                strlen(msg_type[i].name))) {
+                for (unsigned i = 0; i < ARRAY_SIZE(msg_type); i++)
+                    if (cl->query.i_proto == msg_type[i].i_proto
+                     && strncmp((char *)cl->p_buffer, msg_type[i].name,
+                                strlen(msg_type[i].name)) == 0) {
                         p = (char *)&cl->p_buffer[strlen(msg_type[i].name) + 1 ];
                         cl->query.i_type = msg_type[i].i_type;
-                        if (cl->query.i_proto != msg_type[i].i_proto) {
-                            p = NULL;
-                            cl->query.i_proto = HTTPD_PROTO_NONE;
-                            cl->query.i_type = HTTPD_MSG_NONE;
-                        }
                         break;
                     }
 
@@ -1545,13 +1540,7 @@ static void httpd_ClientRecv(httpd_client_t *cl)
         }
     }
 
-    /* check if the client is to be set to dead */
-#if defined(_WIN32)
-    if ((i_len < 0 && WSAGetLastError() != WSAEWOULDBLOCK) || (i_len == 0))
-#else
-    if ((i_len < 0 && errno != EAGAIN) || (i_len == 0))
-#endif
-    {
+    if (i_len == 0) {
         if (cl->query.i_proto != HTTPD_PROTO_NONE && cl->query.i_type != HTTPD_MSG_NONE) {
             /* connection closed -> end of data */
             if (cl->query.i_body > 0)
@@ -1559,15 +1548,31 @@ static void httpd_ClientRecv(httpd_client_t *cl)
             cl->i_state = HTTPD_CLIENT_RECEIVE_DONE;
         }
         else
-            cl->i_state = HTTPD_CLIENT_DEAD;
+            cl->i_state = HTTPD_CLIENT_DEAD; /* connection failed */
+        return 0;
+    }
+
+    /* check if the client is to be set to dead */
+    if (i_len < 0) {
+#if defined(_WIN32)
+        if (WSAGetLastError() == WSAEWOULDBLOCK)
+#else
+        if (errno == EAGAIN)
+#endif
+            return -1;
+
+        cl->i_state = HTTPD_CLIENT_DEAD; /* connection failed */
+        return 0;
     }
 
     /* XXX: for QT I have to disable timeout. Try to find why */
     if (cl->query.i_proto == HTTPD_PROTO_RTSP)
         cl->i_activity_timeout = 0;
+
+    return 0;
 }
 
-static void httpd_ClientSend(httpd_client_t *cl)
+static int httpd_ClientSend(httpd_client_t *cl)
 {
     int i_len;
 
@@ -1604,45 +1609,48 @@ static void httpd_ClientSend(httpd_client_t *cl)
 
     i_len = httpd_NetSend(cl, &cl->p_buffer[cl->i_buffer],
                            cl->i_buffer_size - cl->i_buffer);
-    if (i_len >= 0) {
-        cl->i_buffer += i_len;
 
-        if (cl->i_buffer >= cl->i_buffer_size) {
-            if (cl->answer.i_body == 0  && cl->answer.i_body_offset > 0) {
-                /* catch more body data */
-                int     i_msg = cl->query.i_type;
-                int64_t i_offset = cl->answer.i_body_offset;
-
-                httpd_MsgClean(&cl->answer);
-                cl->answer.i_body_offset = i_offset;
-
-                cl->url->catch[i_msg].cb(cl->url->catch[i_msg].p_sys, cl,
-                                          &cl->answer, &cl->query);
-            }
-
-            if (cl->answer.i_body > 0) {
-                /* send the body data */
-                free(cl->p_buffer);
-                cl->p_buffer = cl->answer.p_body;
-                cl->i_buffer_size = cl->answer.i_body;
-                cl->i_buffer = 0;
-
-                cl->answer.i_body = 0;
-                cl->answer.p_body = NULL;
-            } else /* send finished */
-                cl->i_state = HTTPD_CLIENT_SEND_DONE;
-        }
-    } else {
+    if (i_len < 0) {
 #if defined(_WIN32)
-        if ((i_len < 0 && WSAGetLastError() != WSAEWOULDBLOCK) || (i_len == 0))
+        if (WSAGetLastError() == WSAEWOULDBLOCK)
 #else
-        if ((i_len < 0 && errno != EAGAIN) || (i_len == 0))
+        if (errno == EAGAIN)
 #endif
-        {
-            /* error */
-            cl->i_state = HTTPD_CLIENT_DEAD;
-        }
+            return -1;
+
+        /* Connection failed, or hung up (EPIPE) */
+        cl->i_state = HTTPD_CLIENT_DEAD;
+        return 0;
     }
+
+    cl->i_buffer += i_len;
+
+    if (cl->i_buffer >= cl->i_buffer_size) {
+        if (cl->answer.i_body == 0  && cl->answer.i_body_offset > 0) {
+            /* catch more body data */
+            int     i_msg = cl->query.i_type;
+            int64_t i_offset = cl->answer.i_body_offset;
+
+            httpd_MsgClean(&cl->answer);
+            cl->answer.i_body_offset = i_offset;
+
+            cl->url->catch[i_msg].cb(cl->url->catch[i_msg].p_sys, cl,
+                                     &cl->answer, &cl->query);
+        }
+
+        if (cl->answer.i_body > 0) {
+            /* send the body data */
+            free(cl->p_buffer);
+            cl->p_buffer = cl->answer.p_body;
+            cl->i_buffer_size = cl->answer.i_body;
+            cl->i_buffer = 0;
+
+            cl->answer.i_body = 0;
+            cl->answer.p_body = NULL;
+        } else /* send finished */
+            cl->i_state = HTTPD_CLIENT_SEND_DONE;
+    }
+    return 0;
 }
 
 static void httpd_ClientTlsHandshake(httpd_host_t *host, httpd_client_t *cl)
@@ -1709,12 +1717,25 @@ static void httpdLoop(httpd_host_t *host)
     vlc_mutex_lock(&host->lock);
     /* add all socket that should be read/write and close dead connection */
     vlc_tick_t now = vlc_tick_now();
-    bool b_low_delay = false;
+    int delay = -1;
     httpd_client_t *cl;
 
     int canc = vlc_savecancel();
     vlc_list_foreach(cl, &host->clients, node) {
-        int64_t i_offset;
+        int val = -1;
+
+        switch (cl->i_state) {
+            case HTTPD_CLIENT_RECEIVING:
+                val = httpd_ClientRecv(cl);
+                break;
+            case HTTPD_CLIENT_SENDING:
+                val = httpd_ClientSend(cl);
+                break;
+            case HTTPD_CLIENT_TLS_HS_IN:
+            case HTTPD_CLIENT_TLS_HS_OUT:
+                httpd_ClientTlsHandshake(host, cl);
+                break;
+        }
 
         if (cl->i_state == HTTPD_CLIENT_DEAD
          || (cl->i_activity_timeout > 0
@@ -1722,6 +1743,11 @@ static void httpdLoop(httpd_host_t *host)
             host->client_count--;
             httpd_ClientDestroy(cl);
             continue;
+        }
+
+        if (val == 0) {
+            cl->i_activity_date = now;
+            delay = 0;
         }
 
         struct pollfd *pufd = ufd + nfd;
@@ -1915,7 +1941,7 @@ static void httpdLoop(httpd_host_t *host)
                         cl->i_state = HTTPD_CLIENT_DEAD;
                     httpd_MsgClean(&cl->answer);
                 } else {
-                    i_offset = cl->answer.i_body_offset;
+                    int64_t i_offset = cl->answer.i_body_offset;
                     httpd_MsgClean(&cl->answer);
 
                     cl->answer.i_body_offset = i_offset;
@@ -1928,8 +1954,8 @@ static void httpdLoop(httpd_host_t *host)
                 }
                 break;
 
-            case HTTPD_CLIENT_WAITING:
-                i_offset = cl->answer.i_body_offset;
+            case HTTPD_CLIENT_WAITING: {
+                int64_t i_offset = cl->answer.i_body_offset;
                 int i_msg = cl->query.i_type;
 
                 httpd_MsgInit(&cl->answer);
@@ -1946,20 +1972,21 @@ static void httpdLoop(httpd_host_t *host)
                     cl->answer.i_body = 0;
                     cl->i_state = HTTPD_CLIENT_SENDING;
                 }
+            }
         }
 
         pufd->fd = vlc_tls_GetPollFD(cl->sock, &pufd->events);
 
         if (pufd->events != 0)
             nfd++;
-        else
-            b_low_delay = true;
+        /* we will wait 20ms (not too big) if HTTPD_CLIENT_WAITING */
+        else if (delay != 0)
+            delay = 20;
     }
     vlc_mutex_unlock(&host->lock);
     vlc_restorecancel(canc);
 
-    /* we will wait 20ms (not too big) if HTTPD_CLIENT_WAITING */
-    while (poll(ufd, nfd, b_low_delay ? 20 : -1) < 0)
+    while (poll(ufd, nfd, delay) < 0)
     {
         if (errno != EINTR)
             msg_Err(host, "polling error: %s", vlc_strerror_c(errno));
@@ -1971,29 +1998,6 @@ static void httpdLoop(httpd_host_t *host)
     /* Handle client sockets */
     now = vlc_tick_now();
     nfd = host->nfd;
-
-    vlc_list_foreach(cl, &host->clients, node) {
-        const struct pollfd *pufd = &ufd[nfd];
-
-        assert(pufd < &ufd[ARRAY_SIZE(ufd)]);
-
-        if (vlc_tls_GetFD(cl->sock) != pufd->fd)
-            continue; // we were not waiting for this client
-        ++nfd;
-        if (pufd->revents == 0)
-            continue; // no event received
-
-        cl->i_activity_date = now;
-
-        switch (cl->i_state) {
-            case HTTPD_CLIENT_RECEIVING: httpd_ClientRecv(cl); break;
-            case HTTPD_CLIENT_SENDING:   httpd_ClientSend(cl); break;
-            case HTTPD_CLIENT_TLS_HS_IN:
-            case HTTPD_CLIENT_TLS_HS_OUT:
-                httpd_ClientTlsHandshake(host, cl);
-                break;
-        }
-    }
 
     /* Handle server sockets (accept new connections) */
     for (nfd = 0; nfd < host->nfd; nfd++) {

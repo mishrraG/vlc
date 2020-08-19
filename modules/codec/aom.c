@@ -1,5 +1,5 @@
 /*****************************************************************************
- * aom.c: libaom decoder (AV1) module
+ * aom.c: libaom encoder and decoder (AV1) module
  *****************************************************************************
  * Copyright (C) 2016 VLC authors and VideoLAN
  *
@@ -36,6 +36,7 @@
 #include <aom/aomdx.h>
 
 #ifdef ENABLE_SOUT
+# include <aom/aom_encoder.h>
 # include <aom/aomcx.h>
 # include <aom/aom_image.h>
 # define SOUT_CFG_PREFIX "sout-aom-"
@@ -84,6 +85,14 @@ vlc_module_begin ()
             change_integer_range( 0, 6 ) /* 1 << 6 == MAX_TILE_ROWS */
         add_integer( SOUT_CFG_PREFIX "tile-columns", 0, "Tile Columns (in log2 units)", NULL, true )
             change_integer_range( 0, 6 ) /* 1 << 6 == MAX_TILE_COLS */
+        add_integer( SOUT_CFG_PREFIX "cpu-used", 1, "Speed setting", NULL, true )
+            change_integer_range( 0, 8 ) /* good: 0-5, realtime: 6-8 */
+        add_integer( SOUT_CFG_PREFIX "lag-in-frames", 16, "Maximum number of lookahead frames", NULL, true )
+            change_integer_range(0, 70 /* MAX_LAG_BUFFERS + MAX_LAP_BUFFERS */ )
+        add_integer( SOUT_CFG_PREFIX "usage", 0, "Usage (0: good, 1: realtime)", NULL, true )
+            change_integer_range( 0, 1 )
+        add_integer( SOUT_CFG_PREFIX "rc-end-usage", 1, "Usage (0: VBR, 1: CBR, 2: CQ, 3: Q)", NULL, true )
+            change_integer_range( 0, 4 )
 #ifdef AOM_CTRL_AV1E_SET_ROW_MT
         add_bool( SOUT_CFG_PREFIX "row-mt", false, "Row Multithreading", NULL, true )
 #endif
@@ -394,6 +403,10 @@ static void CloseDecoder(vlc_object_t *p_this)
 
 #ifdef ENABLE_SOUT
 
+#ifndef AOM_USAGE_REALTIME
+# define AOM_USAGE_REALTIME 1
+#endif
+
 /*****************************************************************************
  * encoder_sys_t: libaom encoder descriptor
  *****************************************************************************/
@@ -424,12 +437,22 @@ static int OpenEncoder(vlc_object_t *p_this)
 
     struct aom_codec_enc_cfg enccfg = { 0 };
     aom_codec_enc_config_default(iface, &enccfg, 0);
+    /* TODO: implement 2-pass */
+    enccfg.g_pass = AOM_RC_ONE_PASS;
     enccfg.g_timebase.num = p_enc->fmt_in.video.i_frame_rate_base;
     enccfg.g_timebase.den = p_enc->fmt_in.video.i_frame_rate;
     enccfg.g_threads = __MIN(vlc_GetCPUCount(), 4);
     enccfg.g_w = p_enc->fmt_in.video.i_visible_width;
     enccfg.g_h = p_enc->fmt_in.video.i_visible_height;
-    enccfg.g_lag_in_frames = 16; /* we have no pcr on sout */
+    enccfg.rc_end_usage = var_InheritInteger( p_enc, SOUT_CFG_PREFIX "rc-end-usage" );
+    enccfg.g_usage = var_InheritInteger( p_enc, SOUT_CFG_PREFIX "usage" );
+    /* we have no pcr on sout, hence this defaulting to 16 */
+    enccfg.g_lag_in_frames = var_InheritInteger( p_enc, SOUT_CFG_PREFIX "lag-in-frames" );
+    if( enccfg.g_usage == AOM_USAGE_REALTIME && enccfg.g_lag_in_frames != 0 )
+    {
+        msg_Warn( p_enc, "Non-zero lag in frames is not supported for realtime, forcing 0" );
+        enccfg.g_lag_in_frames = 0;
+    }
 
     int enc_flags;
     int i_profile = var_InheritInteger( p_enc, SOUT_CFG_PREFIX "profile" );
@@ -515,6 +538,15 @@ static int OpenEncoder(vlc_object_t *p_this)
         return VLC_EGENERIC;
     }
 #endif
+
+    int i_cpu_used = var_InheritInteger( p_enc, SOUT_CFG_PREFIX "cpu-used" );
+    if (aom_codec_control(ctx, AOME_SET_CPUUSED, i_cpu_used))
+    {
+        AOM_ERR(p_this, ctx, "Failed to set cpu-used");
+        destroy_context(p_this, ctx);
+        free(p_sys);
+        return VLC_EGENERIC;
+    }
 
     p_enc->pf_encode_video = Encode;
 

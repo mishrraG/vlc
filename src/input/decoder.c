@@ -49,6 +49,7 @@
 #include "../clock/clock.h"
 #include "decoder.h"
 #include "resource.h"
+#include "libvlc.h"
 
 #include "../video_output/vout_internal.h"
 
@@ -128,7 +129,6 @@ struct vlc_input_decoder_t
 
     vout_thread_t   *p_vout;
     enum vlc_vout_order vout_order;
-    bool            vout_thread_started;
 
     /* -- Theses variables need locking on read *and* write -- */
     /* Preroll */
@@ -404,16 +404,14 @@ static int ModuleThread_UpdateAudioFormat( decoder_t *p_dec )
     return 0;
 }
 
-static int CreateVoutIfNeeded(vlc_input_decoder_t *, vout_thread_t **, enum vlc_vout_order *, vlc_decoder_device **);
+static int CreateVoutIfNeeded(vlc_input_decoder_t *);
 
 
 static int ModuleThread_UpdateVideoFormat( decoder_t *p_dec, vlc_video_context *vctx )
 {
     vlc_input_decoder_t *p_owner = dec_get_owner( p_dec );
 
-    enum vlc_vout_order vout_order;
-    vout_thread_t *p_vout = NULL;
-    int created_vout = CreateVoutIfNeeded(p_owner, &p_vout, &vout_order, NULL);
+    int created_vout = CreateVoutIfNeeded(p_owner);
     if (created_vout == -1)
         return -1; // error
     if (created_vout == 0)
@@ -422,6 +420,8 @@ static int ModuleThread_UpdateVideoFormat( decoder_t *p_dec, vlc_video_context *
         if (vctx != NULL && p_owner->vctx == vctx)
             return 0;
     }
+    assert(p_owner->p_vout);
+
     if (p_owner->vctx)
         vlc_video_context_Release(p_owner->vctx);
     p_owner->vctx = vctx ? vlc_video_context_Hold(vctx) : NULL;
@@ -463,31 +463,26 @@ static int ModuleThread_UpdateVideoFormat( decoder_t *p_dec, vlc_video_context *
             return -1;
         }
     }
-    int res;
-    if (p_owner->vout_thread_started)
-    {
-        res = vout_ChangeSource(p_vout, &p_dec->fmt_out.video);
-        if (res == 0)
-            // the display/thread is started and can handle the new source format
-            return 0;
-    }
 
     vout_configuration_t cfg = {
-        .vout = p_vout, .clock = p_owner->p_clock, .fmt = &p_dec->fmt_out.video,
+        .vout = p_owner->p_vout, .clock = p_owner->p_clock, .fmt = &p_dec->fmt_out.video,
         .mouse_event = MouseEvent, .mouse_opaque = p_dec,
     };
-    res = input_resource_StartVout( p_owner->p_resource, vctx, &cfg);
-    if (res == 0)
+    bool has_started;
+    vout_thread_t *p_vout =
+        input_resource_RequestVout(p_owner->p_resource, vctx, &cfg, NULL,
+                                   &has_started);
+    if (p_vout != NULL)
     {
-        p_owner->vout_thread_started = true;
-        decoder_Notify(p_owner, on_vout_started, p_vout, vout_order);
+        if (has_started)
+            decoder_Notify(p_owner, on_vout_started, p_vout, p_owner->vout_order);
+        return 0;
     }
-    return res;
+
+    return -1;
 }
 
-static int CreateVoutIfNeeded(vlc_input_decoder_t *p_owner,
-                              vout_thread_t **pp_vout, enum vlc_vout_order *order,
-                              vlc_decoder_device **pp_dec_dev)
+static int CreateVoutIfNeeded(vlc_input_decoder_t *p_owner)
 {
     decoder_t *p_dec = &p_owner->dec;
     bool need_vout = false;
@@ -534,21 +529,7 @@ static int CreateVoutIfNeeded(vlc_input_decoder_t *p_owner,
     }
 
     if( !need_vout )
-    {
-        if (pp_vout || pp_dec_dev)
-        {
-            vlc_mutex_lock( &p_owner->lock );
-            if ( pp_vout )
-                *pp_vout = p_owner->p_vout;
-            if ( pp_dec_dev )
-                *pp_dec_dev = NULL;
-            input_resource_GetVoutDecoderDevice( p_owner->p_resource,
-                                                 p_owner->p_vout, order, pp_dec_dev );
-            *order = p_owner->vout_order;
-            vlc_mutex_unlock( &p_owner->lock );
-        }
         return 0; // vout unchanged
-    }
 
     vlc_mutex_lock( &p_owner->lock );
 
@@ -556,24 +537,13 @@ static int CreateVoutIfNeeded(vlc_input_decoder_t *p_owner,
     p_owner->p_vout = NULL; // the DecoderThread should not use the old vout anymore
     vlc_mutex_unlock( &p_owner->lock );
 
-    if ( pp_dec_dev ) *pp_dec_dev = NULL;
-    p_vout = input_resource_GetVoutDecoderDevice( p_owner->p_resource,
-                                                  p_vout, order, pp_dec_dev );
-
-    if (pp_vout)
-        *pp_vout = p_vout;
+    enum vlc_vout_order order;
+    const vout_configuration_t cfg = { .vout = p_vout, .fmt = NULL };
+    p_vout = input_resource_RequestVout( p_owner->p_resource, NULL, &cfg, &order, NULL );
 
     vlc_mutex_lock( &p_owner->lock );
     p_owner->p_vout = p_vout;
-    p_owner->vout_order = *order;
-    if ( pp_dec_dev )
-    {
-        if( p_vout == NULL && *pp_dec_dev != NULL )
-        {
-            vlc_decoder_device_Release( *pp_dec_dev );
-            *pp_dec_dev = NULL;
-        }
-    }
+    p_owner->vout_order = order;
 
     DecoderUpdateFormatLocked( p_owner );
     p_owner->fmt.video.i_chroma = p_dec->fmt_out.i_codec;
@@ -606,19 +576,14 @@ static vlc_decoder_device * ModuleThread_GetDecoderDevice( decoder_t *p_dec )
     if( !var_InheritBool( p_dec, "hw-dec" ) )
         return NULL;
 
-    enum vlc_vout_order vout_order;
-    vlc_decoder_device *dec_device = NULL;
-    int created_vout = CreateVoutIfNeeded(p_owner, NULL, &vout_order, &dec_device);
+    int created_vout = CreateVoutIfNeeded(p_owner);
     if (created_vout == -1)
-    {
-        if ( dec_device )
-            vlc_decoder_device_Release( dec_device );
         return NULL;  // error
-    }
+
+    assert(p_owner->p_vout);
+    vlc_decoder_device *dec_device = vout_GetDevice(p_owner->p_vout);
     if (created_vout == 1)
-    {
         return dec_device; // new vout was created with a decoder device
-    }
 
     bool need_format_update = false;
     if ( memcmp( &p_dec->fmt_out.video.mastering,
@@ -694,7 +659,6 @@ static subpicture_t *ModuleThread_NewSpuBuffer( decoder_t *p_dec,
 
             vout_Release(p_owner->p_vout);
             p_owner->p_vout = NULL; // the DecoderThread should not use the old vout anymore
-            p_owner->vout_thread_started = false;
             vlc_mutex_unlock( &p_owner->lock );
         }
         return NULL;
@@ -715,7 +679,6 @@ static subpicture_t *ModuleThread_NewSpuBuffer( decoder_t *p_dec,
                                              p_owner->i_spu_channel);
             vout_Release(p_owner->p_vout);
             p_owner->p_vout = NULL; // the DecoderThread should not use the old vout anymore
-            p_owner->vout_thread_started = false;
         }
 
         enum vlc_vout_order channel_order;
@@ -733,7 +696,6 @@ static subpicture_t *ModuleThread_NewSpuBuffer( decoder_t *p_dec,
         }
 
         p_owner->p_vout = p_vout;
-        p_owner->vout_thread_started = true;
         p_owner->vout_order = channel_order;
         vlc_mutex_unlock(&p_owner->lock);
 
@@ -823,16 +785,6 @@ static void RequestReload( vlc_input_decoder_t *p_owner )
     /* Don't override reload if it's RELOAD_DECODER_AOUT */
     int expected = RELOAD_NO_REQUEST;
     atomic_compare_exchange_strong( &p_owner->reload, &expected, RELOAD_DECODER );
-}
-
-static void DecoderThread_AbortPictures( decoder_t *p_dec, bool b_abort )
-{
-    vlc_input_decoder_t *p_owner = dec_get_owner( p_dec );
-
-    vlc_mutex_lock( &p_owner->lock ); // called in DecoderThread
-    if (p_owner->out_pool)
-        picture_pool_Cancel( p_owner->out_pool, b_abort );
-    vlc_mutex_unlock( &p_owner->lock );
 }
 
 static void DecoderWaitUnblock( vlc_input_decoder_t *p_owner )
@@ -1052,7 +1004,7 @@ static void ModuleThread_QueueCc( decoder_t *p_videodec, block_t *p_cc,
 static int ModuleThread_PlayVideo( vlc_input_decoder_t *p_owner, picture_t *p_picture )
 {
     decoder_t *p_dec = &p_owner->dec;
-    vout_thread_t  *p_vout = p_owner->vout_thread_started ? p_owner->p_vout : NULL;
+    vout_thread_t  *p_vout = p_owner->p_vout;
 
     if( p_picture->date == VLC_TICK_INVALID )
         /* FIXME: VLC_TICK_INVALID -- verify video_output */
@@ -1128,13 +1080,14 @@ static void ModuleThread_UpdateStatVideo( vlc_input_decoder_t *p_owner,
 {
     unsigned displayed = 0;
     unsigned vout_lost = 0;
+    unsigned vout_late = 0;
     if( p_owner->p_vout != NULL )
     {
-        vout_GetResetStatistic( p_owner->p_vout, &displayed, &vout_lost );
+        vout_GetResetStatistic( p_owner->p_vout, &displayed, &vout_lost, &vout_late );
     }
     if (lost) vout_lost++;
 
-    decoder_Notify(p_owner, on_new_video_stats, 1, vout_lost, displayed);
+    decoder_Notify(p_owner, on_new_video_stats, 1, vout_lost, displayed, vout_late);
 }
 
 static void ModuleThread_QueueVideo( decoder_t *p_dec, picture_t *p_pic )
@@ -1513,12 +1466,12 @@ static void DecoderThread_Flush( vlc_input_decoder_t *p_owner )
     }
     else if( p_dec->fmt_out.i_cat == VIDEO_ES )
     {
-        if( p_owner->p_vout && p_owner->vout_thread_started )
+        if( p_owner->p_vout )
             vout_FlushAll( p_owner->p_vout );
     }
     else if( p_dec->fmt_out.i_cat == SPU_ES )
     {
-        if( p_owner->p_vout && p_owner->vout_thread_started )
+        if( p_owner->p_vout )
         {
             assert( p_owner->i_spu_channel != VOUT_SPU_CHANNEL_INVALID );
             vout_FlushSubpictureChannel( p_owner->p_vout, p_owner->i_spu_channel );
@@ -1761,7 +1714,6 @@ static const struct decoder_owner_callbacks dec_video_cbs =
         .get_device = ModuleThread_GetDecoderDevice,
         .format_update = ModuleThread_UpdateVideoFormat,
         .buffer_new = ModuleThread_NewVideoBuffer,
-        .abort_pictures = DecoderThread_AbortPictures,
         .queue = ModuleThread_QueueVideo,
         .queue_cc = ModuleThread_QueueCc,
         .get_display_date = ModuleThread_GetDisplayDate,
@@ -1827,7 +1779,6 @@ CreateDecoder( vlc_object_t *p_parent,
     p_owner->cbs_userdata = cbs_userdata;
     p_owner->p_aout = NULL;
     p_owner->p_vout = NULL;
-    p_owner->vout_thread_started = false;
     p_owner->i_spu_channel = VOUT_SPU_CHANNEL_INVALID;
     p_owner->i_spu_order = 0;
     p_owner->p_sout = p_sout;
@@ -1999,16 +1950,21 @@ static void DeleteDecoder( vlc_input_decoder_t *p_owner )
         case VIDEO_ES: {
             vout_thread_t *vout = p_owner->p_vout;
 
-            if (vout != NULL && p_owner->vout_thread_started)
+            if (p_owner->out_pool)
+                picture_pool_Cancel( p_owner->out_pool, false );
+
+            if (vout != NULL)
             {
-                /* Reset the cancel state that was set before joining the decoder
-                 * thread */
-                if (p_owner->out_pool)
-                    picture_pool_Cancel( p_owner->out_pool, false );
-                vout_StopDisplay(vout);
-                p_owner->vout_thread_started = false;
-                decoder_Notify(p_owner, on_vout_stopped, vout);
-                input_resource_PutVout(p_owner->p_resource, vout);
+                /* Hold the vout since PutVout will likely release it and a
+                 * last reference is needed for notify callbacks */
+                vout_Hold(vout);
+
+                bool has_stopped;
+                input_resource_PutVout(p_owner->p_resource, vout, &has_stopped);
+                if (has_stopped)
+                    decoder_Notify(p_owner, on_vout_stopped, vout);
+
+                vout_Release(vout);
             }
             break;
         }
@@ -2022,7 +1978,6 @@ static void DeleteDecoder( vlc_input_decoder_t *p_owner )
                 vout_UnregisterSubpictureChannel( p_owner->p_vout,
                                                   p_owner->i_spu_channel );
                 vout_Release(p_owner->p_vout);
-                p_owner->vout_thread_started = false;
             }
             break;
         }
@@ -2184,10 +2139,26 @@ void vlc_input_decoder_Delete( vlc_input_decoder_t *p_owner )
      *
      * This unblocks the thread, allowing the decoder module to join all its
      * worker threads (if any) and the decoder thread to terminate. */
-    if( p_dec->fmt_in.i_cat == VIDEO_ES && p_owner->p_vout != NULL && p_owner->vout_thread_started )
+    if( p_dec->fmt_in.i_cat == VIDEO_ES && p_owner->p_vout != NULL )
     {
         if (p_owner->out_pool)
             picture_pool_Cancel( p_owner->out_pool, true );
+
+        if( p_owner->paused )
+        {
+            /* The DecoderThread could be stuck in pf_decode(). This is likely the
+            * case with paused asynchronous decoder modules that have a limited
+            * input and output pool size. Indeed, with such decoders, you have to
+            * release an output buffer to get an input buffer. So, when paused and
+            * flushed, the DecoderThread could be waiting for an output buffer to
+            * be released (or rendered). In that case, the DecoderThread will
+            * never be flushed since it be never leave pf_decode(). To fix this
+            * issue, pre-flush the vout from here. The vout will have to be
+            * flushed again since the module could be outputting more buffers just
+            * after being unstuck. */
+
+            vout_FlushAll( p_owner->p_vout );
+        }
     }
     vlc_mutex_unlock( &p_owner->lock );
 
@@ -2330,8 +2301,7 @@ void vlc_input_decoder_Flush( vlc_input_decoder_t *p_owner )
          * after being unstuck. */
 
         vlc_mutex_lock( &p_owner->lock );
-        if( p_owner->dec.fmt_out.i_cat == VIDEO_ES
-         && p_owner->p_vout && p_owner->vout_thread_started )
+        if( p_owner->dec.fmt_out.i_cat == VIDEO_ES && p_owner->p_vout )
             vout_FlushAll( p_owner->p_vout );
         vlc_mutex_unlock( &p_owner->lock );
     }

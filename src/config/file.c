@@ -57,8 +57,7 @@ static inline char *strdupnull (const char *src)
  */
 static char *config_GetConfigFile( vlc_object_t *obj )
 {
-    char *psz_file = var_CreateGetNonEmptyString( obj, "config" );
-    var_Destroy( obj, "config" );
+    char *psz_file = var_InheritString( obj, "config" );
     if( psz_file == NULL )
     {
         char *psz_dir = config_GetUserDir( VLC_CONFIG_DIR );
@@ -103,7 +102,7 @@ static FILE *config_OpenConfigFile( vlc_object_t *p_obj )
                 /* Old config file found. We want to write it at the
                  * new location now. */
                 msg_Info( p_obj, "Found old config file at %s. "
-                          "VLC will now use %s.", psz_old, psz_filename );
+                          "now using %s.", psz_old, psz_filename );
                 char *psz_readme;
                 if( asprintf(&psz_readme,"%s/.vlc/README",
                              home ) != -1 )

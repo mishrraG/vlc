@@ -44,6 +44,8 @@
 #include "vout_helper.h"
 #include "internal.h"
 #include "renderer.h"
+#include "sampler.h"
+#include "sampler_priv.h"
 #include "sub_renderer.h"
 
 struct vout_display_opengl_t {
@@ -51,7 +53,11 @@ struct vout_display_opengl_t {
     vlc_gl_t   *gl;
     struct vlc_gl_api api;
 
+    struct vlc_gl_interop *interop;
+    struct vlc_gl_sampler *sampler;
     struct vlc_gl_renderer *renderer;
+
+    struct vlc_gl_interop *sub_interop;
     struct vlc_gl_sub_renderer *sub_renderer;
 };
 
@@ -103,12 +109,10 @@ vout_display_opengl_t *vout_display_opengl_New(video_format_t *fmt,
 
     int ret = vlc_gl_api_Init(&vgl->api, gl);
     if (ret != VLC_SUCCESS)
-    {
-        free(vgl);
-        return NULL;
-    }
+        goto free_vgl;
 
-    const opengl_vtable_t *vt = &vgl->api.vt;
+    const struct vlc_gl_api *api = &vgl->api;
+    const opengl_vtable_t *vt = &api->vt;
 
 #if !defined(USE_OPENGL_ES2)
     const unsigned char *ogl_version = vt->GetString(GL_VERSION);
@@ -116,8 +120,7 @@ vout_display_opengl_t *vout_display_opengl_New(video_format_t *fmt,
     if (!supports_shaders)
     {
         msg_Err(gl, "shaders not supported, bailing out");
-        free(vgl);
-        return NULL;
+        goto free_vgl;
     }
 #endif
 
@@ -130,45 +133,76 @@ vout_display_opengl_t *vout_display_opengl_New(video_format_t *fmt,
         (GLint)fmt->i_height > max_tex_size)
         ResizeFormatToGLMaxTexSize(fmt, max_tex_size);
 
-    bool b_dump_shaders = var_InheritInteger(gl, "verbose") >= 4;
+    vgl->interop = vlc_gl_interop_New(gl, api, context, fmt);
+    if (!vgl->interop)
+    {
+        msg_Err(gl, "Could not create interop");
+        goto free_vgl;
+    }
 
-    struct vlc_gl_renderer *renderer = vgl->renderer =
-        vlc_gl_renderer_New(gl, &vgl->api, context, fmt, b_dump_shaders);
+    vgl->sampler = vlc_gl_sampler_New(vgl->interop);
+    if (!vgl->sampler)
+    {
+        msg_Err(gl, "Could not create sampler");
+        goto delete_interop;
+    }
+
+    vgl->renderer = vlc_gl_renderer_New(gl, api, vgl->sampler);
     if (!vgl->renderer)
     {
         msg_Warn(gl, "Could not create renderer for %4.4s",
                  (const char *) &fmt->i_chroma);
-        free(vgl);
-        return NULL;
+        goto delete_sampler;
     }
 
     GL_ASSERT_NOERROR(vt);
 
-    vgl->sub_renderer = vlc_gl_sub_renderer_New(gl, &vgl->api);
+    vgl->sub_interop = vlc_gl_interop_NewForSubpictures(gl, api);
+    if (!vgl->sub_interop)
+    {
+        msg_Err(gl, "Could not create sub interop");
+        goto delete_renderer;
+    }
+
+    vgl->sub_renderer =
+        vlc_gl_sub_renderer_New(gl, api, vgl->sub_interop);
     if (!vgl->sub_renderer)
     {
         msg_Err(gl, "Could not create sub renderer");
-        vlc_gl_renderer_Delete(vgl->renderer);
-        free(vgl);
-        return NULL;
+        goto delete_sub_interop;
     }
 
     GL_ASSERT_NOERROR(vt);
 
-    if (renderer->fmt.projection_mode != PROJECTION_MODE_RECTANGULAR
+    if (fmt->projection_mode != PROJECTION_MODE_RECTANGULAR
      && vout_display_opengl_SetViewpoint(vgl, viewpoint) != VLC_SUCCESS)
-    {
-        vout_display_opengl_Delete(vgl);
-        return NULL;
-    }
+        goto delete_sub_renderer;
 
-    *fmt = renderer->fmt;
+    /* Forward to the core the changes to the input format requested by the
+     * interop */
+    *fmt = vgl->interop->fmt_in;
+
     if (subpicture_chromas) {
         *subpicture_chromas = gl_subpicture_chromas;
     }
 
     GL_ASSERT_NOERROR(vt);
     return vgl;
+
+delete_sub_renderer:
+    vlc_gl_sub_renderer_Delete(vgl->sub_renderer);
+delete_sub_interop:
+    vlc_gl_interop_Delete(vgl->sub_interop);
+delete_renderer:
+    vlc_gl_renderer_Delete(vgl->renderer);
+delete_sampler:
+    vlc_gl_sampler_Delete(vgl->sampler);
+delete_interop:
+    vlc_gl_interop_Delete(vgl->interop);
+free_vgl:
+    free(vgl);
+
+    return NULL;
 }
 
 void vout_display_opengl_Delete(vout_display_opengl_t *vgl)
@@ -182,7 +216,11 @@ void vout_display_opengl_Delete(vout_display_opengl_t *vgl)
     vt->Flush();
 
     vlc_gl_sub_renderer_Delete(vgl->sub_renderer);
+    vlc_gl_interop_Delete(vgl->sub_interop);
+
     vlc_gl_renderer_Delete(vgl->renderer);
+    vlc_gl_sampler_Delete(vgl->sampler);
+    vlc_gl_interop_Delete(vgl->interop);
 
     GL_ASSERT_NOERROR(vt);
 
@@ -213,7 +251,7 @@ int vout_display_opengl_Prepare(vout_display_opengl_t *vgl,
 {
     GL_ASSERT_NOERROR(&vgl->api.vt);
 
-    int ret = vlc_gl_renderer_Prepare(vgl->renderer, picture);
+    int ret = vlc_gl_sampler_Update(vgl->sampler, picture);
     if (ret != VLC_SUCCESS)
         return ret;
 

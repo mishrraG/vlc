@@ -59,6 +59,7 @@ extern "C" char **environ;
 #include "dialogs/help/help.hpp"     /* Launch Update */
 #include "util/recents.hpp"          /* Recents Item destruction */
 #include "util/qvlcapp.hpp"     /* QVLCApplication definition */
+#include "maininterface/compositor.hpp"
 
 #include <QVector>
 #include "playlist/playlist_item.hpp"
@@ -151,6 +152,8 @@ static void ShowDialog   ( intf_thread_t *, int, int, intf_dialog_args_t * );
                              "for main interface, playlist and extended panel."\
                              " This option only works with Windows and " \
                              "X11 with composite extensions." )
+
+#define INTERFACE_SCALE_TEXT N_( "User scale factor for the interface, betwwen 0.1 and 10.0" )
 
 #define ERROR_TEXT N_( "Show unimportant error and warnings dialogs" )
 
@@ -279,6 +282,9 @@ vlc_module_begin ()
                           OPACITY_LONGTEXT, false )
     add_float_with_range( "qt-fs-opacity", 0.8, 0.1, 1., OPACITY_FS_TEXT,
                           OPACITY_FS_LONGTEXT, false )
+
+    add_float_with_range( "qt-interface-scale", 1.0, 0.1, 10., INTERFACE_SCALE_TEXT,
+                          INTERFACE_SCALE_TEXT, false )
 
     add_bool( "qt-video-autoresize", true, KEEPSIZE_TEXT,
               KEEPSIZE_LONGTEXT, false )
@@ -561,6 +567,8 @@ static void *Thread( void *obj )
 
     Q_INIT_RESOURCE( vlc );
 
+    p_intf->p_sys->p_compositor = vlc::Compositor::createCompositor(p_intf);
+
 #if HAS_QT56
     QApplication::setAttribute( Qt::AA_EnableHighDpiScaling );
     QApplication::setAttribute( Qt::AA_UseHighDpiPixmaps );
@@ -637,25 +645,12 @@ static void *Thread( void *obj )
 
     if( !p_sys->b_isDialogProvider )
     {
-#ifdef _WIN32
-        p_mi = new MainInterfaceWin32( p_intf );
-#else
-        p_mi = new MainInterface( p_intf );
-#endif
+        p_mi = p_intf->p_sys->p_compositor->makeMainInterface();
         p_sys->p_mi = p_mi;
 
-        QList<QQmlError> qmlErrors = p_sys->p_mi->qmlErrors();
-        if( !qmlErrors.isEmpty() )
+        if (!p_mi)
         {
-            msg_Err( p_intf, "Missing qml modules: " );
-
-            for( QQmlError &qmlError : qmlErrors )
-                msg_Err( p_intf, "%s", qtu(qmlError.description()) );
-#ifdef QT_STATICPLUGIN
-            assert( !"Missing qml modules from qt contribs." );
-#else
-            msg_Err( p_intf, "Install missing modules using your packaging tool" );
-#endif
+            msg_Err(p_intf, "unable to create main interface");
             return ThreadCleanup( p_intf, true );
         }
 
@@ -750,13 +745,13 @@ static void *ThreadCleanup( intf_thread_t *p_intf, bool error )
             open_state = OPEN_STATE_INIT;
     }
 
-    if( p_sys->p_mi != NULL)
+    if (p_sys->p_compositor)
     {
-        MainInterface *p_mi = p_sys->p_mi;
-        p_sys->p_mi = NULL;
-        /* Destroy first the main interface because it is connected to some
-           slots in the MainInputManager */
-        delete p_mi;
+        p_sys->p_compositor->destroyMainInterface();
+        p_sys->p_mi = nullptr;
+
+        delete p_sys->p_compositor;
+        p_sys->p_compositor = nullptr;
     }
 
     /* */
@@ -831,8 +826,6 @@ static int WindowOpen( vout_window_t *p_wnd )
     if (unlikely(open_state != OPEN_STATE_OPENED))
         return VLC_EGENERIC;
 
-    MainInterface *p_mi = p_intf->p_sys->p_mi;
-
-    return p_mi->getVideo( p_wnd ) ? VLC_SUCCESS : VLC_EGENERIC;
+    return p_intf->p_sys->p_compositor->setupVoutWindow( p_wnd ) ? VLC_SUCCESS : VLC_EGENERIC;
 
 }

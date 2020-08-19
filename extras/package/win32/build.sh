@@ -28,12 +28,18 @@ OPTIONS:
    -s            Interactive shell (get correct environment variables for build)
    -b <url>      Enable breakpad support and send crash reports to this URL
    -d            Create PDB files during the build
+   -D <win_path> Create PDB files during the build, map the VLC sources to <win_path>
+                 e.g.: -D c:/sources/vlc
    -x            Add extra checks when compiling
+   -u            Use the Universal C Runtime (instead of msvcrt)
+   -w            Restrict to Windows Store APIs
+   -z            Build without GUI (libvlc only)
+   -o <path>     Install the built binaries in the absolute path
 EOF
 }
 
 ARCH="x86_64"
-while getopts "hra:pcli:sb:dx" OPTION
+while getopts "hra:pcli:sb:dD:xuwzo:" OPTION
 do
      case $OPTION in
          h)
@@ -68,8 +74,24 @@ do
          d)
              WITH_PDB="yes"
          ;;
+         D)
+             WITH_PDB="yes"
+             PDB_MAP=$OPTARG
+         ;;
          x)
              EXTRA_CHECKS="yes"
+         ;;
+         u)
+             BUILD_UCRT="yes"
+         ;;
+         w)
+             WINSTORE="yes"
+         ;;
+         z)
+             DISABLEGUI="yes"
+         ;;
+         o)
+             INSTALL_PATH=$OPTARG
          ;;
      esac
 done
@@ -101,6 +123,7 @@ esac
 #####
 
 SCRIPT_PATH="$( cd "$(dirname "$0")" ; pwd -P )"
+VLC_ROOT_PATH="$( cd "${SCRIPT_PATH}/../../.." ; pwd -P )"
 
 : ${JOBS:=$(getconf _NPROCESSORS_ONLN 2>&1)}
 TRIPLET=$ARCH-w64-mingw32
@@ -127,7 +150,7 @@ if [ "$COMPILING_WITH_CLANG" -gt 0 ] && [ ! -d "libtool" ]; then
 fi
 # bootstrap only if needed in interactive mode
 if [ "$INTERACTIVE" != "yes" ] || [ ! -f ./Makefile ]; then
-    NEEDED="$FORCED_TOOLS" ${SCRIPT_PATH}/../../tools/bootstrap
+    NEEDED="$FORCED_TOOLS" ${VLC_ROOT_PATH}/extras/tools/bootstrap
 fi
 make -j$JOBS
 
@@ -139,14 +162,47 @@ then
     then
         echo "Using wsl.exe to replace wine"
         echo "#!/bin/sh" > build/bin/wine
-        echo "wsl.exe \"\$@\"" >> build/bin/wine
+        echo "\"\$@\"" >> build/bin/wine
+        chmod +x build/bin/wine
     fi
 fi
 
 cd ../../
 
+CONTRIB_PREFIX=$TRIPLET
+if [ ! -z "$BUILD_UCRT" ]; then
+    if [ ! -z "$WINSTORE" ]; then
+        CONTRIBFLAGS="$CONTRIBFLAGS --disable-disc --disable-srt --disable-sdl --disable-SDL_image --disable-caca"
+        # modplug uses GlobalAlloc/Free and lstrcpyA/wsprintfA/lstrcpynA
+        CONTRIBFLAGS="$CONTRIBFLAGS --disable-modplug"
+        # x265 uses too many forbidden APIs
+        CONTRIBFLAGS="$CONTRIBFLAGS --disable-x265"
+        # aribb25 uses ANSI strings in WIDE APIs
+        CONTRIBFLAGS="$CONTRIBFLAGS --disable-aribb25"
+        # gettext uses sys/socket.h improperly
+        CONTRIBFLAGS="$CONTRIBFLAGS --disable-gettext"
+        # fontconfig uses GetWindowsDirectory and SHGetFolderPath
+        CONTRIBFLAGS="$CONTRIBFLAGS --disable-fontconfig"
+        # asdcplib uses some fordbidden SetErrorModes, GetModuleFileName in fileio.cpp
+        CONTRIBFLAGS="$CONTRIBFLAGS --disable-asdcplib"
+        # projectM is openGL based
+        CONTRIBFLAGS="$CONTRIBFLAGS --disable-projectM"
+        # gpg-error doesn't know minwg32uwp
+        # CONTRIBFLAGS="$CONTRIBFLAGS --disable-gpg-error"
+        # x264 build system claims it needs MSVC to build for WinRT
+        CONTRIBFLAGS="$CONTRIBFLAGS --disable-x264"
+
+        # libdsm is not enabled by default
+        CONTRIBFLAGS="$CONTRIBFLAGS --enable-libdsm"
+
+        CONTRIB_PREFIX="${CONTRIB_PREFIX}uwp"
+    else
+        CONTRIB_PREFIX="${CONTRIB_PREFIX}ucrt"
+    fi
+fi
+
 export USE_FFMPEG=1
-export PATH="$PWD/contrib/$TRIPLET/bin":"$PATH"
+export PATH="$PWD/contrib/$CONTRIB_PREFIX/bin":"$PATH"
 
 if [ "$INTERACTIVE" = "yes" ]; then
 if [ "x$SHELL" != "x" ]; then
@@ -156,12 +212,70 @@ else
 fi
 fi
 
+if [ ! -z "$BUILD_UCRT" ]; then
+    WIDL=${TRIPLET}-widl
+    CPPFLAGS="$CPPFLAGS -D__MSVCRT_VERSION__=0xE00"
+
+    if [ ! -z "$WINSTORE" ]; then
+        SHORTARCH="$SHORTARCH-uwp"
+        CPPFLAGS="$CPPFLAGS -D_WIN32_WINNT=0x0A00 -DWINVER=0x0A00 -DWINAPI_FAMILY=WINAPI_FAMILY_APP -D_UNICODE -DUNICODE"
+
+        # WinstoreCompat: hopefully can go away someday
+        LDFLAGS="$LDFLAGS -lwindowsapp -lwindowsappcompat"
+        CFLAGS="$CFLAGS -Wl,-lwindowsapp,-lwindowsappcompat"
+        CXXFLAGS="$CXXFLAGS -Wl,-lwindowsapp,-lwindowsappcompat"
+        CPPFLAGS="$CPPFLAGS -DWINSTORECOMPAT"
+        EXTRA_CRUNTIME="vcruntime140_app"
+    else
+        SHORTARCH="$SHORTARCH-ucrt"
+        # The current minimum for VLC is Windows 7
+        CPPFLAGS="$CPPFLAGS -D_WIN32_WINNT=0x0601 -DWINVER=0x0601"
+        # this library doesn't exist yet, so use ucrt twice as a placeholder
+        # EXTRA_CRUNTIME="vcruntime140"
+        EXTRA_CRUNTIME="ucrt"
+    fi
+
+    LDFLAGS="$LDFLAGS -l$EXTRA_CRUNTIME -lucrt"
+    if [ ! "$COMPILING_WITH_CLANG" -gt 0 ]; then
+        # assume gcc
+        NEWSPECFILE="`pwd`/specfile-$SHORTARCH"
+        # tell gcc to replace msvcrt with ucrtbase+ucrt
+        $CC -dumpspecs | sed -e "s/-lmsvcrt/-l$EXTRA_CRUNTIME -lucrt/" > $NEWSPECFILE
+        CFLAGS="$CFLAGS -specs=$NEWSPECFILE"
+        CXXFLAGS="$CXXFLAGS -specs=$NEWSPECFILE"
+
+        if [ ! -z "$WINSTORE" ]; then
+            # trick to provide these libraries instead of -ladvapi32 -lshell32 -luser32 -lkernel32
+            sed -i -e "s/-ladvapi32/-lwindowsapp -lwindowsappcompat/" $NEWSPECFILE
+            sed -i -e "s/-lshell32//" $NEWSPECFILE
+            sed -i -e "s/-luser32//" $NEWSPECFILE
+            sed -i -e "s/-lkernel32//" $NEWSPECFILE
+        fi
+    else
+        CFLAGS="$CFLAGS -Wl,-l$EXTRA_CRUNTIME,-lucrt"
+        CXXFLAGS="$CXXFLAGS -Wl,-l$EXTRA_CRUNTIME,-lucrt"
+    fi
+
+    # the values are not passed to the makefiles/configures
+    export LDFLAGS
+    export CPPFLAGS
+else
+    # The current minimum for VLC is Windows 7 and to use the regular msvcrt
+    CPPFLAGS="$CPPFLAGS -D_WIN32_WINNT=0x0601 -DWINVER=0x0601 -D__MSVCRT_VERSION__=0x700"
+fi
+CFLAGS="$CPPFLAGS $CFLAGS"
+CXXFLAGS="$CPPFLAGS $CXXFLAGS"
+
 info "Building contribs"
 echo $PATH
 
 mkdir -p contrib/contrib-$SHORTARCH && cd contrib/contrib-$SHORTARCH
 if [ ! -z "$WITH_PDB" ]; then
     CONTRIBFLAGS="$CONTRIBFLAGS --enable-pdb"
+    if [ ! -z "$PDB_MAP" ]; then
+        CFLAGS="$CFLAGS -fdebug-prefix-map='$VLC_ROOT_PATH'='$PDB_MAP'"
+        CXXFLAGS="$CXXFLAGS -fdebug-prefix-map='$VLC_ROOT_PATH'='$PDB_MAP'"
+    fi
 fi
 if [ ! -z "$BREAKPAD" ]; then
      CONTRIBFLAGS="$CONTRIBFLAGS --enable-breakpad"
@@ -169,7 +283,18 @@ fi
 if [ "$RELEASE" != "yes" ]; then
      CONTRIBFLAGS="$CONTRIBFLAGS --disable-optim"
 fi
-${SCRIPT_PATH}/../../../contrib/bootstrap --host=$TRIPLET $CONTRIBFLAGS
+if [ ! -z "$DISABLEGUI" ]; then
+    CONTRIBFLAGS="$CONTRIBFLAGS --disable-qt --disable-qtsvg --disable-qtdeclarative --disable-qtgraphicaleffects --disable-qtquickcontrols2"
+fi
+if [ ! -z "$WINSTORE" ]; then
+    # we don't use a special toolchain to trigger the detection in contribs so force it manually
+    export HAVE_WINSTORE=1
+fi
+
+export CFLAGS
+export CXXFLAGS
+
+${VLC_ROOT_PATH}/contrib/bootstrap --host=$TRIPLET --prefix=../$CONTRIB_PREFIX $CONTRIBFLAGS
 
 # Rebuild the contribs or use the prebuilt ones
 if [ "$PREBUILT" != "yes" ]; then
@@ -190,9 +315,9 @@ cd ../..
 
 info "Bootstrapping"
 
-if ! [ -e ${SCRIPT_PATH}/../../../configure ]; then
+if ! [ -e ${VLC_ROOT_PATH}/configure ]; then
     echo "Bootstraping vlc"
-    ${SCRIPT_PATH}/../../../bootstrap
+    ${VLC_ROOT_PATH}/bootstrap
 fi
 
 info "Configuring VLC"
@@ -208,14 +333,13 @@ if [ -z "$PKG_CONFIG" ]; then
         fi
     else
         # $TRIPLET-pkg-config WORKs
-        export PKG_CONFIG="pkg-config"
+        export PKG_CONFIG="$TRIPLET-pkg-config"
     fi
 fi
 
 mkdir -p $SHORTARCH
 cd $SHORTARCH
 
-CONFIGFLAGS=""
 if [ "$RELEASE" != "yes" ]; then
      CONFIGFLAGS="$CONFIGFLAGS --enable-debug"
 else
@@ -234,8 +358,28 @@ if [ ! -z "$EXTRA_CHECKS" ]; then
     CFLAGS="$CFLAGS -Werror=incompatible-pointer-types -Werror=missing-field-initializers"
     CXXFLAGS="$CXXFLAGS -Werror=missing-field-initializers"
 fi
+if [ ! -z "$DISABLEGUI" ]; then
+    CONFIGFLAGS="$CONFIGFLAGS --disable-vlc --disable-qt --disable-skins2"
+else
+    CONFIGFLAGS="$CONFIGFLAGS --enable-qt --enable-skins2"
+fi
+if [ ! -z "$WINSTORE" ]; then
+    CONFIGFLAGS="$CONFIGFLAGS --enable-winstore-app"
+    # uses CreateFile to access files/drives outside of the app
+    CONFIGFLAGS="$CONFIGFLAGS --disable-vcd"
+    # OpenGL is not supported in UWP
+    CONFIGFLAGS="$CONFIGFLAGS --disable-gl"
+    # other modules that were disabled in the old UWP builds
+    CONFIGFLAGS="$CONFIGFLAGS --disable-crystalhd --disable-dxva2"
 
-${SCRIPT_PATH}/configure.sh --host=$TRIPLET --with-contrib=../contrib/$TRIPLET $CONFIGFLAGS
+else
+    CONFIGFLAGS="$CONFIGFLAGS --enable-dvdread --enable-caca"
+fi
+if [ ! -z "$INSTALL_PATH" ]; then
+    CONFIGFLAGS="$CONFIGFLAGS --prefix=$INSTALL_PATH"
+fi
+
+${SCRIPT_PATH}/configure.sh --host=$TRIPLET --with-contrib=../contrib/$CONTRIB_PREFIX $CONFIGFLAGS
 
 info "Compiling"
 make -j$JOBS
@@ -249,4 +393,6 @@ make package-win32-release
 sha512sum vlc-*-release.7z
 elif [ "$INSTALLER" = "m" ]; then
 make package-msi
+elif [ ! -z "$INSTALL_PATH" ]; then
+make package-win-install
 fi

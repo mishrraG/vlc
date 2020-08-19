@@ -24,11 +24,36 @@ import "qrc:///widgets/" as Widgets
 
 Widgets.NavigableFocusScope {
     id: root
+    property alias sortModel: tracklistdisplay_id.sortModel
+    property alias model: tracklistdisplay_id.model
+
+    Widgets.MenuExt {
+        id: contextMenu
+        property var model: ({})
+        closePolicy: Popup.CloseOnReleaseOutside | Popup.CloseOnEscape
+
+        Widgets.MenuItemExt {
+            id: playMenuItem
+            text: "Play from start"
+            onTriggered: {
+                medialib.addAndPlay( contextMenu.model.id )
+                history.push(["player"])
+            }
+        }
+
+        Widgets.MenuItemExt {
+            text: "Enqueue"
+            onTriggered: medialib.addToPlaylist( contextMenu.model.id )
+        }
+
+        onClosed: contextMenu.parent.forceActiveFocus()
+
+    }
 
     MusicTrackListDisplay {
         id: tracklistdisplay_id
         anchors.fill: parent
-        visible: tracklistdisplay_id.delegateModel.count > 0
+        visible: model.count > 0
         focus: visible
         navigationParent: root
         navigationCancel: function() {
@@ -37,11 +62,16 @@ Widgets.NavigableFocusScope {
             else
                 tracklistdisplay_id.currentIndex = 0;
         }
+
+        onContextMenuButtonClicked: {
+            contextMenu.model = menuModel
+            contextMenu.popup(menuParent)
+        }
     }
 
     EmptyLabel {
         anchors.fill: parent
-        visible: tracklistdisplay_id.delegateModel.count === 0
+        visible: tracklistdisplay_id.model.count === 0
         focus: visible
         text: i18n.qtr("No tracks found\nPlease try adding sources, by going to the Network tab")
         navigationParent: root

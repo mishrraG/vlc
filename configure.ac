@@ -119,6 +119,13 @@ AX_CHECK_COMPILE_FLAG([-Werror=unknown-warning-option], [
   AX_APPEND_FLAG([-Werror=unknown-warning-option], [OBJCFLAGS])
 ])
 
+dnl Some Qt version are generating tons of warning that cannot be
+dnl avoided so mute them...
+AX_CHECK_COMPILE_FLAG([-Wno-deprecated-copy], [
+  VLC_ADD_CXXFLAGS([qt],[-Wno-deprecated-copy])
+])
+
+
 dnl
 dnl  Check the operating system
 dnl
@@ -199,7 +206,7 @@ case "${host_os}" in
     AX_APPEND_FLAG([-Wl,-headerpad_max_install_names], [LDFLAGS])
 
     VLC_ADD_LIBS([libvlc vlc],[-Wl,-undefined,dynamic_lookup,-framework,AppKit])
-    VLC_ADD_LIBS([libvlccore],[-Wl,-framework,CoreFoundation,-framework,CoreServices])
+    VLC_ADD_LIBS([libvlccore],[-Wl,-framework,CoreFoundation])
 
     AC_EGREP_CPP(yes,
             [#import <TargetConditionals.h>
@@ -219,6 +226,8 @@ case "${host_os}" in
              HAVE_OSX="0"
              ac_cv_func_fork=no
              ],)
+
+    AS_IF([test "${HAVE_OSX}" = "1"],[VLC_ADD_LIBS([libvlccore],[-Wl,-framework,CoreServices])])
 
     dnl
     dnl  Handle Mac OS X SDK flags
@@ -263,6 +272,18 @@ case "${host_os}" in
       ]],[[;]])
     ],[
       AC_DEFINE([_WIN32_WINNT], [0x0601], [Define to '0x0601' for Windows 7 APIs.])
+    ])
+    AC_MSG_CHECKING([if libsynchronization is needed])
+    AC_PREPROC_IFELSE([AC_LANG_PROGRAM(
+      [[#if _WIN32_WINNT >= 0x0602
+       # error building for Win8+ and above
+       #endif
+      ]],[[;]])
+    ],[
+      AC_MSG_RESULT([no])
+    ],[
+      AC_MSG_RESULT([yes])
+      VLC_ADD_LIBS([libvlccore], [-lsynchronization])
     ])
     AC_DEFINE([_WIN32_IE], [0x0600], [Define to '0x0600' for IE 6.0 (and shell) APIs.])
     AC_DEFINE([UNICODE], [1], [Define to 1 for Unicode (Wide Chars) APIs.])
@@ -375,7 +396,7 @@ AS_IF([test "${SYS}" = "mingw32"],[
     AX_APPEND_FLAG([-DWINSTORECOMPAT],[CFLAGS])
     AX_APPEND_FLAG([-DWINSTORECOMPAT],[CPPFLAGS])
     AX_APPEND_FLAG([-DWINSTORECOMPAT],[CXXFLAGS])
-    AX_APPEND_FLAG([-lwinstorecompat], [LDFLAGS])
+    LDFLAGS="${LDFLAGS} -lwindowsappcompat"
     VLC_ADD_LIBS([libvlccore], [-lruntimeobject])
     AC_LIBOBJ([gai_strerror])
   ],[])
@@ -715,16 +736,6 @@ esac
 
 AH_BOTTOM([#include <vlc_fixups.h>])
 
-dnl Check for struct pollfd
-AC_CHECK_TYPES([struct pollfd],,,
-[#include <sys/types.h>
-#if HAVE_POLL
-# include <poll.h>
-#elif defined (_WIN32)
-# include <winsock2.h>
-#endif
-])
-
 dnl Check for struct timespec
 AC_CHECK_TYPES([struct timespec],,,
 [#include <time.h>])
@@ -939,7 +950,7 @@ dnl Check for headers
 dnl
 
 dnl  POSIX
-AC_CHECK_HEADERS([arpa/inet.h pthread.h search.h sys/shm.h sys/socket.h sys/uio.h])
+AC_CHECK_HEADERS([arpa/inet.h poll.h pthread.h search.h sys/shm.h sys/socket.h sys/uio.h])
 AC_CHECK_HEADERS([net/if.h], [], [],
 [
 #include <sys/types.h>
@@ -956,6 +967,16 @@ AC_CHECK_HEADERS([features.h getopt.h linux/dccp.h linux/magic.h sys/eventfd.h])
 
 dnl  MacOS
 AC_CHECK_HEADERS([xlocale.h])
+
+dnl Check for struct pollfd
+AC_CHECK_TYPES([struct pollfd],,,
+[#include <sys/types.h>
+#if HAVE_POLL_H
+# include <poll.h>
+#elif defined (_WIN32)
+# include <winsock2.h>
+#endif
+])
 
 dnl Check if C++ headers define locale_t
 AC_LANG_PUSH(C++)
@@ -1046,8 +1067,30 @@ dnl
 AX_APPEND_COMPILE_FLAGS([-Wall -Wextra -Wsign-compare -Wundef -Wpointer-arith -Wvolatile-register-var -Wformat -Wformat-security -Wduplicated-branches -Wduplicated-cond], [CFLAGS])
 AX_APPEND_COMPILE_FLAGS([-Wall -Wextra -Wsign-compare -Wundef -Wpointer-arith -Wvolatile-register-var -Wformat -Wformat-security -Wduplicated-branches -Wduplicated-cond], [CXXFLAGS])
 
+dnl -Werror-implicit-function-declaration is used for the if_nametoindex detection with winstore
 AX_APPEND_COMPILE_FLAGS([-Wbad-function-cast -Wwrite-strings -Wmissing-prototypes -Werror-implicit-function-declaration -Winit-self -Wlogical-op -Wshadow=local -Wmultistatement-macros], [CFLAGS])
 AX_APPEND_COMPILE_FLAGS([-pipe], [CFLAGS])
+
+dnl UWP forbidden checks
+AS_IF([test "${SYS}" = "mingw32"], [
+  AC_MSG_CHECKING(for if_nametoindex availability)
+  AC_COMPILE_IFELSE([AC_LANG_PROGRAM(
+      [[#include <windows.h>
+        #if defined(__MINGW64_VERSION_MAJOR) && __MINGW64_VERSION_MAJOR < 6
+        # include <wincrypt.h>
+        #endif
+        #include <iphlpapi.h>
+        static void test (void) {
+          if_nametoindex("");
+        }
+      ]],[[;]])
+    ],[
+      AC_MSG_RESULT([present])
+      AC_DEFINE([HAVE_IF_NAMETOINDEX], [1], [Define to 1 if you have if_nametoindex function])
+    ],[
+      AC_MSG_RESULT([not present])
+    ])
+])
 
 dnl
 dnl  Debugging mode
@@ -2454,35 +2497,6 @@ then
 fi
 
 dnl
-dnl CrystalHD codec plugin
-dnl
-AC_ARG_ENABLE([crystalhd],
-  AS_HELP_STRING([--enable-crystalhd], [crystalhd codec plugin (default auto)]))
-if test "${enable_crystalhd}" != "no"; then
-    AC_CHECK_HEADER(libcrystalhd/libcrystalhd_if.h, [
-      VLC_ADD_PLUGIN([crystalhd])
-      VLC_ADD_LIBS([crystalhd], [-lcrystalhd])
-    ],[
-      if test "${SYS}" = "mingw32" ; then
-        AC_CHECK_HEADERS([libcrystalhd/bc_dts_defs.h], [
-          VLC_ADD_PLUGIN([crystalhd])
-          AC_CHECK_HEADERS([libcrystalhd/bc_drv_if.h], [
-            VLC_ADD_LIBS([crystalhd], [-lbcmDIL])
-            ])
-        ],[
-          AS_IF([test x"${enable_crystalhd}" = "xyes"],
-                [AC_MSG_ERROR("Could not find CrystalHD development headers")],
-                [AC_MSG_WARN("Could not find CrystalHD development headers")])
-        ],[#define __LINUX_USER__
-               #include <libcrystalhd/bc_dts_types.h>
-        ])
-      fi
-    ],[
-       #include <libcrystalhd/bc_dts_types.h>
-      ])
-fi
-
-dnl
 dnl  mad plugin
 dnl
 have_mad="no"
@@ -2610,7 +2624,7 @@ have_vaapi_drm="no"
 have_vaapi_x11="no"
 have_vaapi_wl="no"
 AS_IF([test "${enable_libva}" != "no"], [
-  PKG_CHECK_MODULES([LIBVA], [libva >= 0.38], [
+  PKG_CHECK_MODULES([LIBVA], [libva >= 1.0], [
     have_vaapi="yes"
   ], [
     AS_IF([test -n "${enable_libva}"], [
@@ -2751,6 +2765,19 @@ have_iapplication_data2="no"
 AC_CHECK_TYPES([IApplicationData2],[],[],[#include <windows.storage.h>])
 
 dnl
+dnl DirectComposition
+dnl
+AC_LANG_PUSH([C++])
+AC_CHECK_HEADERS([dcomp.h], [
+    have_dcomp="yes"
+], [], [
+  #include <windows.h>
+])
+AC_LANG_POP([C++])
+AM_CONDITIONAL([HAVE_DCOMP], [test "${have_dcomp}" = "yes"])
+
+
+dnl
 dnl  avformat demuxer/muxer plugin
 dnl
 
@@ -2830,30 +2857,30 @@ fi
 dnl
 dnl  faad decoder plugin
 dnl
-AC_ARG_ENABLE([faad],
-AS_HELP_STRING([--enable-faad], [faad codec (default auto)]))
-have_faad="no"
-AS_IF([test "${enable_faad}" != "no"], [
-  AC_CHECK_HEADERS([neaacdec.h], [
-    AC_CHECK_LIB([faad], [NeAACDecOpen], [have_faad="yes"],, [$LIBM])
-
-    AS_IF([test "${have_faad}" = "yes"], [
-      VLC_ADD_PLUGIN([faad])
-      VLC_ADD_LIBS([faad],[-lfaad])
-    ], [
-      AS_IF([test "${enable_faad}" = "yes"], [
-        AC_MSG_ERROR([cannot find FAAD library])
-      ], [
-        AC_MSG_WARN([cannot find FAAD library])
-      ])
+PKG_WITH_MODULES([FAAD],[faad2],
+  VLC_ADD_PLUGIN(faad)
+  VLC_ADD_CFLAGS(faad, [$FAAD_CFLAGS])
+  VLC_ADD_LIBS(faad,[$FAAD_LIBS]),
+  AS_IF([test "x${enable_faad}" != "xno"],[
+    AC_CHECK_HEADERS([neaacdec.h], [
+      AC_CHECK_LIB([faad], [NeAACDecOpen],[
+                      VLC_ADD_PLUGIN([faad])
+                      VLC_ADD_LIBS([faad],[-lfaad])
+                      found_faad="yes"
+                   ],[], [$LIBM])
     ])
-  ])
-])
+    AS_IF([test "x${found_faad}" != "xyes"],
+        AS_IF([test "x${enable_faad}" == "xyes"],
+            AC_MSG_ERROR([${FAAD_PKG_ERRORS}.]),
+            AC_MSG_WARN([${FAAD_PKG_ERRORS}.]))
+    )
+  ]),
+[faad AAC audio decoder])
 
 dnl
-dnl  AOM decoder plugin
+dnl  AOM encoder/decoder plugin
 dnl
-PKG_ENABLE_MODULES_VLC([AOM], [], [aom], [experimental AV1 codec (default auto)])
+PKG_ENABLE_MODULES_VLC([AOM], [], [aom], [libaom AV1 encoder and decoder (default auto)])
 
 dnl
 dnl  Dav1d decoder plugin
@@ -3154,6 +3181,7 @@ AS_IF( [test "${enable_zvbi}" != "no"],[
         [
           VLC_ADD_PLUGIN([zvbi])
           AC_DEFINE(ZVBI_COMPILED, 1, [Define if the zvbi module is built])
+          have_zvbi="yes"
           AS_IF( [test "${enable_telx}" = "yes"],[
                   AC_MSG_WARN([The zvbi and telx modules are incompatible. Using zvbi.])
                   ])
@@ -3161,9 +3189,14 @@ AS_IF( [test "${enable_zvbi}" != "no"],[
           AC_MSG_WARN([${ZVBI_PKG_ERRORS}. Enabling the telx module instead.])
         ])
     ])
+AM_CONDITIONAL([HAVE_ZVBI], [test "x${have_zvbi}" = x"yes"])
+
 AS_IF( [test "${enable_telx}" != "no" ],[
   VLC_ADD_PLUGIN([telx])
+  have_telx="yes"
+  AC_DEFINE(TELX_COMPILED, 1, [Define if the telx module is built])
   ])
+AM_CONDITIONAL([HAVE_TELX], [test "x${have_telx}" = x"yes"])
 
 dnl
 dnl ARIB subtitles rendering module
@@ -3285,7 +3318,14 @@ AS_IF([test "${have_gl}" = "yes"], [
 ])
 
 dnl OpenGL ES 2: depends on EGL 1.1
-PKG_ENABLE_MODULES_VLC([GLES2], [], [glesv2], [OpenGL ES v2 support], [disabled])
+have_gles2="no"
+AC_ARG_ENABLE(gles2,
+  [AS_HELP_STRING([--enable-gles2],
+      [enable GLES2 support (default disabled)])])
+AS_IF([test "$enable_gles2" = "yes"], [
+  PKG_CHECK_MODULES([GLES2], [glesv2], [have_gles2="yes"], [])
+  ])
+AM_CONDITIONAL([HAVE_GLES2], [test "${have_gles2}" = "yes"])
 
 dnl
 dnl Vulkan
@@ -4413,9 +4453,9 @@ AS_IF([test "${enable_osx_notifications}" != "no"], [
 dnl
 dnl Libnotify notification plugin
 dnl
-PKG_ENABLE_MODULES_VLC([NOTIFY], [], [libnotify gtk+-3.0], [libnotify notification], [auto])
+PKG_ENABLE_MODULES_VLC([NOTIFY], [], [libnotify], [libnotify notification], [auto])
 
-PKG_ENABLE_MODULES_VLC([MEDIALIBRARY], [medialibrary], [medialibrary >= 0.7.1], (medialibrary support), [auto])
+PKG_ENABLE_MODULES_VLC([MEDIALIBRARY], [medialibrary], [medialibrary >= 0.8.0], (medialibrary support), [auto])
 
 dnl
 dnl  Endianness check

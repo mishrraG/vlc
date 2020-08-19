@@ -35,20 +35,35 @@ MLAlbumTrack::MLAlbumTrack(vlc_medialibrary_t* _ml, const vlc_ml_media_t *_data,
     int min = (t_sec / 60) % 60;
     int hour = t_sec / 3600;
     if (hour == 0)
+    {
         m_duration = QString("%1:%2")
                 .arg(min, 2, 10, QChar('0'))
                 .arg(sec, 2, 10, QChar('0'));
+        m_durationShort = m_duration;
+    }
     else
+    {
         m_duration = QString("%1:%2:%3")
                 .arg(hour, 2, 10, QChar('0'))
                 .arg(min, 2, 10, QChar('0'))
                 .arg(sec, 2, 10, QChar('0'));
+        m_durationShort = QString("%1h%2")
+                .arg(hour)
+                .arg(min, 2, 10, QChar('0'));
+    }
 
     for( const vlc_ml_file_t& file: ml_range_iterate<vlc_ml_file_t>( _data->p_files ) )
         if( file.i_type == VLC_ML_FILE_TYPE_MAIN )
         {
             //FIXME should we store every mrl
             m_mrl = QString::fromUtf8(file.psz_mrl);
+            break;
+        }
+
+    for( const vlc_ml_thumbnail_t& thumbnail: _data->thumbnails )
+        if( thumbnail.b_generated )
+        {
+            m_cover = QString::fromUtf8(thumbnail.psz_mrl);
             break;
         }
 
@@ -69,15 +84,16 @@ MLAlbumTrack::MLAlbumTrack(vlc_medialibrary_t* _ml, const vlc_ml_media_t *_data,
 
 MLAlbumTrack::MLAlbumTrack(const MLAlbumTrack &albumtrack, QObject *_parent)
     : QObject( _parent )
-    , m_id         ( albumtrack.m_id )
-    , m_title      ( albumtrack.m_title )
-    , m_albumTitle ( albumtrack.m_albumTitle )
-    , m_artist     ( albumtrack.m_artist )
-    , m_cover      ( albumtrack.m_cover )
-    , m_trackNumber( albumtrack.m_trackNumber )
-    , m_discNumber ( albumtrack.m_discNumber )
-    , m_duration   ( albumtrack.m_duration )
-    , m_mrl        ( albumtrack.m_mrl )
+    , m_id           ( albumtrack.m_id )
+    , m_title        ( albumtrack.m_title )
+    , m_albumTitle   ( albumtrack.m_albumTitle )
+    , m_artist       ( albumtrack.m_artist )
+    , m_cover        ( albumtrack.m_cover )
+    , m_trackNumber  ( albumtrack.m_trackNumber )
+    , m_discNumber   ( albumtrack.m_discNumber )
+    , m_duration     ( albumtrack.m_duration )
+    , m_durationShort( albumtrack.m_durationShort )
+    , m_mrl          ( albumtrack.m_mrl )
 {
 }
 
@@ -119,6 +135,11 @@ unsigned int MLAlbumTrack::getDiscNumber() const
 QString MLAlbumTrack::getDuration() const
 {
     return m_duration;
+}
+
+QString MLAlbumTrack::getDurationShort() const
+{
+    return m_durationShort;
 }
 
 QString MLAlbumTrack::getMRL() const

@@ -216,9 +216,10 @@ EXTRA_LTLIBRARIES += libvnc_plugin.la
 
 ### Optical media ###
 
-libcdda_plugin_la_SOURCES = access/cdda.c access/vcd/cdrom.c access/vcd/cdrom.h access/vcd/cdrom_internals.h \
-                            misc/webservices/json.c misc/webservices/json.h misc/webservices/json_helper.h \
-                            misc/webservices/musicbrainz.c misc/webservices/musicbrainz.h
+libcdda_plugin_la_SOURCES = access/cdda.c access/disc_helper.h access/vcd/cdrom.c access/vcd/cdrom.h \
+                            access/vcd/cdrom_internals.h misc/webservices/json.c misc/webservices/json.h \
+                            misc/webservices/json_helper.h misc/webservices/musicbrainz.c \
+                            misc/webservices/musicbrainz.h
 libcdda_plugin_la_CFLAGS = $(AM_CFLAGS) $(LIBCDDB_CFLAGS)
 libcdda_plugin_la_LIBADD = $(LIBCDDB_LIBS) $(LIBM)
 libcdda_plugin_la_LDFLAGS = $(AM_LDFLAGS) -rpath '$(accessdir)'
@@ -242,7 +243,7 @@ endif
 EXTRA_LTLIBRARIES += libvcd_plugin.la
 access_LTLIBRARIES += $(LTLIBvcd)
 
-libdvdnav_plugin_la_SOURCES = access/dvdnav.c demux/mpeg/ps.h demux/mpeg/pes.h
+libdvdnav_plugin_la_SOURCES = access/disc_helper.h access/dvdnav.c demux/mpeg/ps.h demux/mpeg/pes.h
 libdvdnav_plugin_la_CFLAGS = $(AM_CFLAGS) $(DVDNAV_CFLAGS)
 libdvdnav_plugin_la_LIBADD = $(DVDNAV_LIBS)
 libdvdnav_plugin_la_LDFLAGS = $(AM_LDFLAGS) -rpath '$(accessdir)'
@@ -252,7 +253,7 @@ endif
 access_LTLIBRARIES += $(LTLIBdvdnav)
 EXTRA_LTLIBRARIES += libdvdnav_plugin.la
 
-libdvdread_plugin_la_SOURCES = access/dvdread.c demux/mpeg/ps.h demux/mpeg/pes.h \
+libdvdread_plugin_la_SOURCES = access/disc_helper.h access/dvdread.c demux/mpeg/ps.h demux/mpeg/pes.h \
                                demux/moving_avg.h demux/timestamps_filter.h
 libdvdread_plugin_la_CFLAGS = $(AM_CFLAGS) $(DVDREAD_CFLAGS)
 libdvdread_plugin_la_LIBADD = $(DVDREAD_LIBS)

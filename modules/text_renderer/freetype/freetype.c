@@ -42,28 +42,6 @@
 #include <vlc_text_style.h>                                   /* text_style_t*/
 #include <vlc_charset.h>
 
-/* apple stuff */
-#ifdef __APPLE__
-# undef HAVE_FONTCONFIG
-# define HAVE_GET_FONT_BY_FAMILY_NAME
-#endif
-
-/* Win32 */
-#ifdef _WIN32
-# undef HAVE_FONTCONFIG
-# define HAVE_GET_FONT_BY_FAMILY_NAME
-#endif
-
-/* FontConfig */
-#ifdef HAVE_FONTCONFIG
-# define HAVE_GET_FONT_BY_FAMILY_NAME
-#endif
-
-/* Android */
-#ifdef __ANDROID__
-# define HAVE_GET_FONT_BY_FAMILY_NAME
-#endif
-
 #include <assert.h>
 
 #include "platform_fonts.h"
@@ -105,6 +83,8 @@ static void Destroy( vlc_object_t * );
 #define SHADOW_COLOR_TEXT N_("Shadow color")
 #define SHADOW_ANGLE_TEXT N_("Shadow angle")
 #define SHADOW_DISTANCE_TEXT N_("Shadow distance")
+#define CACHE_SIZE_TEXT N_("Cache size")
+#define CACHE_SIZE_LONGTEXT N_("Cache size in kBytes")
 
 #define TEXT_DIRECTION_TEXT N_("Text direction")
 #define TEXT_DIRECTION_LONGTEXT N_("Paragraph base direction for the Unicode bi-directional algorithm.")
@@ -204,6 +184,10 @@ vlc_module_begin ()
                           SHADOW_DISTANCE_TEXT, NULL, false )
         change_safe()
 
+    add_integer_with_range( "freetype-cache-size", 200, 25, (UINT32_MAX >> 10),
+                            CACHE_SIZE_TEXT, CACHE_SIZE_LONGTEXT, true )
+        change_safe()
+
     add_obsolete_integer( "freetype-fontsize" );
     add_obsolete_integer( "freetype-rel-fontsize" );
     add_obsolete_integer( "freetype-effect" );
@@ -268,6 +252,27 @@ static FT_Vector GetAlignedOffset( const line_desc_t *p_line,
     return offsets;
 }
 
+static bool IsSupportedAttachment( const char *psz_mime )
+{
+    static const char * fontMimeTypes[] =
+    {
+        "application/x-truetype-font", // TTF
+        "application/x-font-otf",  // OTF
+        "application/font-sfnt",
+        "font/ttf",
+        "font/otf",
+        "font/sfnt",
+    };
+
+    for( size_t i=0; i<ARRAY_SIZE(fontMimeTypes); ++i )
+    {
+        if( !strcmp( psz_mime, fontMimeTypes[i] ) )
+            return true;
+    }
+
+    return false;
+}
+
 /*****************************************************************************
  * Make any TTF/OTF fonts present in the attachments of the media file
  * and store them for later use by the FreeType Engine
@@ -278,7 +283,6 @@ static int LoadFontsFromAttachments( filter_t *p_filter )
     input_attachment_t  **pp_attachments;
     int                   i_attachments_cnt;
     FT_Face               p_face = NULL;
-    char                 *psz_lc = NULL;
 
     if( filter_GetInputAttachments( p_filter, &pp_attachments, &i_attachments_cnt ) )
         return VLC_EGENERIC;
@@ -298,9 +302,8 @@ static int LoadFontsFromAttachments( filter_t *p_filter )
     {
         input_attachment_t *p_attach = pp_attachments[k];
 
-        if( ( !strcmp( p_attach->psz_mime, "application/x-truetype-font" ) || // TTF
-              !strcmp( p_attach->psz_mime, "application/x-font-otf" ) ) &&    // OTF
-            p_attach->i_data > 0 && p_attach->p_data )
+        if( p_attach->i_data > 0 && p_attach->p_data &&
+            IsSupportedAttachment( p_attach->psz_mime ) )
         {
             p_sys->pp_font_attachments[ p_sys->i_font_attachments++ ] = p_attach;
 
@@ -316,30 +319,9 @@ static int LoadFontsFromAttachments( filter_t *p_filter )
                 bool b_bold = p_face->style_flags & FT_STYLE_FLAG_BOLD;
                 bool b_italic = p_face->style_flags & FT_STYLE_FLAG_ITALIC;
 
-                if( p_face->family_name )
-                    psz_lc = ToLower( p_face->family_name );
-                else
-                    if( asprintf( &psz_lc, FB_NAME"-%04d",
-                                  p_sys->i_fallback_counter++ ) < 0 )
-                        psz_lc = NULL;
-
-                if( unlikely( !psz_lc ) )
+                vlc_family_t *p_family = DeclareNewFamily( p_sys->fs, p_face->family_name );
+                if( unlikely( !p_family ) )
                     goto error;
-
-                vlc_family_t *p_family =
-                    vlc_dictionary_value_for_key( &p_sys->family_map, psz_lc );
-
-                if( p_family == kVLCDictionaryNotFound )
-                {
-                    p_family = NewFamily( p_filter, psz_lc, &p_sys->p_families,
-                                          &p_sys->family_map, psz_lc );
-
-                    if( unlikely( !p_family ) )
-                        goto error;
-                }
-
-                free( psz_lc );
-                psz_lc = NULL;
 
                 char *psz_fontfile;
                 if( asprintf( &psz_fontfile, ":/%d",
@@ -349,6 +331,9 @@ static int LoadFontsFromAttachments( filter_t *p_filter )
 
                 FT_Done_Face( p_face );
                 p_face = NULL;
+
+                /* Add font attachment to the "attachments" fallback list */
+                DeclareFamilyAsAttachMenFallback( p_sys->fs, p_family );
 
                 i_font_idx++;
             }
@@ -361,35 +346,11 @@ static int LoadFontsFromAttachments( filter_t *p_filter )
 
     free( pp_attachments );
 
-    /* Add font attachments to the "attachments" fallback list */
-    vlc_family_t *p_attachments = NULL;
-
-    for( vlc_family_t *p_family = p_sys->p_families; p_family;
-         p_family = p_family->p_next )
-    {
-        vlc_family_t *p_temp = NewFamily( p_filter, p_family->psz_name, &p_attachments,
-                                          NULL, NULL );
-        if( unlikely( !p_temp ) )
-        {
-            if( p_attachments )
-                FreeFamilies( p_attachments, NULL );
-            return VLC_ENOMEM;
-        }
-        else
-            p_temp->p_fonts = p_family->p_fonts;
-    }
-
-    if( p_attachments )
-        vlc_dictionary_insert( &p_sys->fallback_map, FB_LIST_ATTACHMENTS, p_attachments );
-
     return VLC_SUCCESS;
 
 error:
     if( p_face )
         FT_Done_Face( p_face );
-
-    if( psz_lc )
-        free( psz_lc );
 
     for( int i = k + 1; i < i_attachments_cnt; ++i )
         vlc_input_attachment_Delete( pp_attachments[ i ] );
@@ -484,7 +445,7 @@ static int RenderYUVP( filter_t *p_filter, subpicture_region_t *p_region,
             const line_character_t *ch = &p_line->p_character[i];
             FT_BitmapGlyph p_glyph = ch->p_glyph;
 
-            int i_glyph_y = offset.y + p_regionbbox->yMax - p_glyph->top + p_line->i_base_line;
+            int i_glyph_y = offset.y + p_regionbbox->yMax - p_glyph->top + p_line->origin.y;
             int i_glyph_x = offset.x + p_glyph->left - p_regionbbox->xMin;
 
             for( y = 0; y < p_glyph->bitmap.rows; y++ )
@@ -855,12 +816,14 @@ static void RenderCharAXYZ( filter_t *p_filter,
             break;
         }
 
-        if(ch->p_ruby && ch->p_ruby->p_laid)
+        const line_desc_t *p_rubydesc = ch->p_ruby ? ch->p_ruby->p_laid : NULL;
+        if(p_rubydesc)
         {
             RenderCharAXYZ( p_filter,
                             p_picture,
-                            ch->p_ruby->p_laid,
-                            i_offset_x, i_offset_y,
+                            p_rubydesc,
+                            i_offset_x + p_rubydesc->origin.x,
+                            i_offset_y - p_rubydesc->origin.y,
                             2,
                             ExtractComponents,
                             BlendPixel );
@@ -888,7 +851,7 @@ static void RenderCharAXYZ( filter_t *p_filter,
         /* underline/strikethrough are only rendered for the normal glyph */
         if( g == 2 && ch->i_line_thickness > 0 )
             BlendAXYZLine( p_picture,
-                           i_glyph_x, i_glyph_y + p_glyph->top,
+                           i_glyph_x, i_glyph_y + ch->bbox.yMax,
                            i_a, i_x, i_y, i_z,
                            &ch[0],
                            i + 1 < p_line->i_character_count ? &ch[1] : NULL,
@@ -959,7 +922,7 @@ static inline int RenderAXYZ( filter_t *p_filter,
         {
             FT_Vector offset = GetAlignedOffset( p_line, p_textbbox, p_region->i_text_align );
 
-            int i_glyph_offset_y = offset.y + p_regionbbox->yMax + p_line->i_base_line;
+            int i_glyph_offset_y = offset.y + p_regionbbox->yMax + p_line->origin.y;
             int i_glyph_offset_x = offset.x - p_regionbbox->xMin;
 
             RenderCharAXYZ( p_filter, p_picture, p_line,
@@ -980,34 +943,32 @@ static void UpdateDefaultLiveStyles( filter_t *p_filter )
 
     p_style->i_background_alpha = var_InheritInteger( p_filter, "freetype-background-opacity" );
     p_style->i_background_color = var_InheritInteger( p_filter, "freetype-background-color" );
+
+    p_sys->i_outline_thickness = var_InheritInteger( p_filter, "freetype-outline-thickness" );
 }
 
 static void FillDefaultStyles( filter_t *p_filter )
 {
     filter_sys_t *p_sys = p_filter->p_sys;
 
+#ifdef HAVE_GET_FONT_BY_FAMILY_NAME
     p_sys->p_default_style->psz_fontname = var_InheritString( p_filter, "freetype-font" );
+#endif
     /* Set default psz_fontname */
     if( !p_sys->p_default_style->psz_fontname || !*p_sys->p_default_style->psz_fontname )
     {
         free( p_sys->p_default_style->psz_fontname );
-#ifdef HAVE_GET_FONT_BY_FAMILY_NAME
         p_sys->p_default_style->psz_fontname = strdup( DEFAULT_FAMILY );
-#else
-        p_sys->p_default_style->psz_fontname = File_Select( DEFAULT_FONT_FILE );
-#endif
     }
 
+#ifdef HAVE_GET_FONT_BY_FAMILY_NAME
     p_sys->p_default_style->psz_monofontname = var_InheritString( p_filter, "freetype-monofont" );
+#endif
     /* set default psz_monofontname */
     if( !p_sys->p_default_style->psz_monofontname || !*p_sys->p_default_style->psz_monofontname )
     {
         free( p_sys->p_default_style->psz_monofontname );
-#ifdef HAVE_GET_FONT_BY_FAMILY_NAME
         p_sys->p_default_style->psz_monofontname = strdup( DEFAULT_MONOSPACE_FAMILY );
-#else
-        p_sys->p_default_style->psz_monofontname = File_Select( DEFAULT_MONOSPACE_FONT_FILE );
-#endif
     }
 
     UpdateDefaultLiveStyles( p_filter );
@@ -1203,7 +1164,7 @@ static int Render( filter_t *p_filter, subpicture_region_t *p_region_out,
                          subpicture_region_t *p_region_in,
                          const vlc_fourcc_t *p_chroma_list )
 {
-    if( !p_region_in )
+    if( !p_region_in || !p_region_in->p_text )
         return VLC_EGENERIC;
 
     filter_sys_t *p_sys = p_filter->p_sys;
@@ -1212,14 +1173,16 @@ static int Render( filter_t *p_filter, subpicture_region_t *p_region_out,
 
     UpdateDefaultLiveStyles( p_filter );
 
-    /*
-     * Update the default face to reflect changes in video size or text scaling
-     */
-    p_sys->p_face = SelectAndLoadFace( p_filter, p_sys->p_default_style, 0 );
-    if( !p_sys->p_face )
+    int i_font_default_size = ConvertToLiveSize( p_filter, p_sys->p_default_style );
+    if( !p_sys->p_faceid || i_font_default_size != p_sys->i_font_default_size )
     {
-        msg_Err( p_filter, "Render(): Error loading default face" );
-        return VLC_EGENERIC;
+        /* Update the default face to reflect changes in video size or text scaling */
+        p_sys->p_faceid = SelectAndLoadFace( p_filter, p_sys->p_default_style, ' ' );
+        if( !p_sys->p_faceid )
+        {
+            msg_Err( p_filter, "Render(): Error loading default face" );
+            return VLC_EGENERIC;
+        }
     }
 
     layout_text_block_t text_block = { 0 };
@@ -1381,6 +1344,10 @@ static int Render( filter_t *p_filter, subpicture_region_t *p_region_out,
                 break;
         }
     }
+    else
+    {
+        rv = VLC_EGENERIC;
+    }
 
     FreeLines( text_block.p_laid );
 
@@ -1390,13 +1357,6 @@ static int Render( filter_t *p_filter, subpicture_region_t *p_region_out,
         FreeRubyBlockArray( text_block.pp_ruby, text_block.i_count );
 
     return rv;
-}
-
-static void FreeFace( void *p_face, void *p_obj )
-{
-    VLC_UNUSED( p_obj );
-
-    FT_Done_Face( ( FT_Face ) p_face );
 }
 
 /*****************************************************************************
@@ -1428,10 +1388,10 @@ static int Create( vlc_object_t *p_this )
         p_sys->p_stroker = NULL;
     }
 
-    /* Dictionnaries for fonts and families */
-    vlc_dictionary_init( &p_sys->face_map, 50 );
-    vlc_dictionary_init( &p_sys->family_map, 50 );
-    vlc_dictionary_init( &p_sys->fallback_map, 20 );
+    p_sys->ftcache = vlc_ftcache_New( p_this, p_sys->p_library,
+                            var_InheritInteger( p_this, "freetype-cache-size" ) );
+    if( !p_sys->ftcache )
+        goto error;
 
     p_sys->i_scale = 100;
 
@@ -1444,6 +1404,11 @@ static int Create( vlc_object_t *p_this )
     p_sys->p_forced_style = text_style_Create( STYLE_NO_DEFAULTS );
     if(unlikely(!p_sys->p_forced_style))
         goto error;
+
+#ifndef HAVE_GET_FONT_BY_FAMILY_NAME
+    p_sys->psz_fontfile = var_InheritString( p_filter, "freetype-font" );
+    p_sys->psz_monofontfile = var_InheritString( p_filter, "freetype-monofont" );
+#endif
 
     /* fills default and forced style */
     FillDefaultStyles( p_filter );
@@ -1461,61 +1426,18 @@ static int Create( vlc_object_t *p_this )
     p_sys->f_shadow_vector_x   = f_shadow_distance * cosf((float)(2. * M_PI) * f_shadow_angle / 360);
     p_sys->f_shadow_vector_y   = f_shadow_distance * sinf((float)(2. * M_PI) * f_shadow_angle / 360);
 
+    p_sys->fs = FontSelectNew( p_filter  );
+    if( !p_sys->fs )
+        goto error;
+
     if( LoadFontsFromAttachments( p_filter ) == VLC_ENOMEM )
         goto error;
 
-#ifdef HAVE_FONTCONFIG
-    p_sys->pf_select = Generic_Select;
-    p_sys->pf_get_family = FontConfig_GetFamily;
-    p_sys->pf_get_fallbacks = FontConfig_GetFallbacks;
-    if( FontConfig_Prepare( p_filter ) )
-        goto error;
-
-#elif defined( __APPLE__ )
-    p_sys->pf_select = Generic_Select;
-    p_sys->pf_get_family = CoreText_GetFamily;
-    p_sys->pf_get_fallbacks = CoreText_GetFallbacks;
-#elif defined( _WIN32 )
-    if( InitDWrite( p_filter ) == VLC_SUCCESS )
+    p_sys->p_faceid = SelectAndLoadFace( p_filter, p_sys->p_default_style, ' ' );
+    if( !p_sys->p_faceid )
     {
-        p_sys->pf_get_family = DWrite_GetFamily;
-        p_sys->pf_get_fallbacks = DWrite_GetFallbacks;
-        p_sys->pf_select = Generic_Select;
-    }
-    else
-    {
-#if VLC_WINSTORE_APP
-        msg_Err( p_filter, "Error initializing DirectWrite" );
-        goto error;
-#else
-        msg_Warn( p_filter, "DirectWrite initialization failed. Falling back to GDI/Uniscribe" );
-        const char *const ppsz_win32_default[] =
-            { "Tahoma", "FangSong", "SimHei", "KaiTi" };
-        p_sys->pf_get_family = Win32_GetFamily;
-        p_sys->pf_get_fallbacks = Win32_GetFallbacks;
-        p_sys->pf_select = Generic_Select;
-        InitDefaultList( p_filter, ppsz_win32_default,
-                         sizeof( ppsz_win32_default ) / sizeof( *ppsz_win32_default ) );
-#endif
-    }
-#elif defined( __ANDROID__ )
-    p_sys->pf_get_family = Android_GetFamily;
-    p_sys->pf_get_fallbacks = Android_GetFallbacks;
-    p_sys->pf_select = Generic_Select;
-
-    if( Android_Prepare( p_filter ) == VLC_ENOMEM )
-        goto error;
-#else
-    p_sys->pf_select = Dummy_Select;
-#endif
-
-    p_sys->p_face = SelectAndLoadFace( p_filter, p_sys->p_default_style, 0 );
-    if( !p_sys->p_face )
-    {
-        msg_Err( p_filter, "Error loading default face" );
-#ifdef HAVE_FONTCONFIG
-        FontConfig_Unprepare();
-#endif
+        msg_Err( p_filter, "Error loading default face %s",
+                 p_sys->p_default_style->psz_fontname );
         goto error;
     }
 
@@ -1539,30 +1461,22 @@ static void Destroy( vlc_object_t *p_this )
     filter_sys_t *p_sys = p_filter->p_sys;
 
 #ifdef DEBUG_PLATFORM_FONTS
-    msg_Dbg( p_filter, "------------------" );
-    msg_Dbg( p_filter, "p_sys->p_families:" );
-    msg_Dbg( p_filter, "------------------" );
-    DumpFamily( p_filter, p_sys->p_families, true, -1 );
-    msg_Dbg( p_filter, "-----------------" );
-    msg_Dbg( p_filter, "p_sys->family_map" );
-    msg_Dbg( p_filter, "-----------------" );
-    DumpDictionary( p_filter, &p_sys->family_map, false, 1 );
-    msg_Dbg( p_filter, "-------------------" );
-    msg_Dbg( p_filter, "p_sys->fallback_map" );
-    msg_Dbg( p_filter, "-------------------" );
-    DumpDictionary( p_filter, &p_sys->fallback_map, true, -1 );
+    if(p_sys->fs)
+        DumpFamilies( p_sys->fs );
 #endif
+
+    if( p_sys->ftcache )
+        vlc_ftcache_Delete( p_sys->ftcache );
+
+    if( p_sys->fs )
+        FontSelectDelete( p_sys->fs );
+
+    free( p_sys->psz_fontfile );
+    free( p_sys->psz_monofontfile );
 
     /* Text styles */
     text_style_Delete( p_sys->p_default_style );
     text_style_Delete( p_sys->p_forced_style );
-
-    /* Fonts dicts */
-    vlc_dictionary_clear( &p_sys->fallback_map, FreeFamilies, p_filter );
-    vlc_dictionary_clear( &p_sys->face_map, FreeFace, p_filter );
-    vlc_dictionary_clear( &p_sys->family_map, NULL, NULL );
-    if( p_sys->p_families )
-        FreeFamiliesAndFonts( p_sys->p_families );
 
     /* Attachments */
     if( p_sys->pp_font_attachments )
@@ -1572,15 +1486,6 @@ static void Destroy( vlc_object_t *p_this )
 
         free( p_sys->pp_font_attachments );
     }
-
-#ifdef HAVE_FONTCONFIG
-    if( p_sys->p_face != NULL )
-        FontConfig_Unprepare();
-
-#elif defined( _WIN32 )
-    if( p_sys->pf_get_family == DWrite_GetFamily )
-        ReleaseDWrite( p_filter );
-#endif
 
     /* Freetype */
     if( p_sys->p_stroker )

@@ -1,7 +1,6 @@
 # aom
-AOM_HASH := add4b15580e410c00c927ee366fa65545045a5d9
-AOM_VERSION := v1.0.0.errata.1
-AOM_GITURL := https://aomedia.googlesource.com/aom/+archive/$(AOM_HASH).tar.gz
+AOM_VERSION := v2.0.0
+AOM_GITURL := https://aomedia.googlesource.com/aom/+archive/$(AOM_VERSION).tar.gz
 
 PKGS += aom
 ifeq ($(call need_pkg,"aom"),)
@@ -16,10 +15,9 @@ $(TARBALLS)/aom-$(AOM_VERSION).tar.gz:
 	touch $@
 
 aom: aom-$(AOM_VERSION).tar.gz .sum-aom
-	rm -Rf $@-$(AOM_VERSION) $@
-	mkdir -p $@-$(AOM_VERSION)
-	tar xvzfo "$<" -C $@-$(AOM_VERSION)
-	$(APPLY) $(SRC)/aom/aom-target-cpu.patch
+	rm -Rf $(UNPACK_DIR) $@
+	mkdir -p $(UNPACK_DIR)
+	tar xvzfo "$<" -C $(UNPACK_DIR)
 ifdef HAVE_ANDROID
 	$(APPLY) $(SRC)/aom/aom-android-pthreads.patch
 	$(APPLY) $(SRC)/aom/aom-android-cpufeatures.patch
@@ -67,7 +65,7 @@ AOM_CONF += -DAOM_ADS2GAS_REQUIRED=1 -DAOM_ADS2GAS=../build/make/ads2gas.pl -DAO
 endif
 endif
 
-ifdef HAVE_IOS
+ifdef HAVE_DARWIN_OS
 ifneq ($(filter arm aarch64, $(ARCH)),)
 # These targets don't have runtime cpu detection.
 AOM_CONF += -DCONFIG_RUNTIME_CPU_DETECT=0

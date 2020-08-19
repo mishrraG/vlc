@@ -106,10 +106,27 @@ QHash<int, QByteArray> NetworkMediaModel::roleNames() const
     };
 }
 
+
+QMap<QString, QVariant> NetworkMediaModel::getDataAt(int idx)
+{
+    QMap<QString, QVariant> dataDict;
+    QHash<int,QByteArray> roles = roleNames();
+    for (auto role: roles.keys()) {
+        dataDict[roles[role]] = data(index(idx), role);
+    }
+    return dataDict;
+}
+
+
 int NetworkMediaModel::rowCount(const QModelIndex& parent) const
 {
     if ( parent.isValid() )
         return 0;
+    return getCount();
+}
+
+int NetworkMediaModel::getCount() const
+{
     assert( m_items.size() < INT32_MAX );
     return static_cast<int>( m_items.size() );
 }
@@ -198,11 +215,28 @@ bool NetworkMediaModel::addToPlaylist(const QVariantList &itemIdList)
     bool ret = false;
     for (const QVariant& varValue: itemIdList)
     {
+        int index = -1;
+
         if (varValue.canConvert<int>())
-        {
-            auto index = varValue.value<int>();
-            ret |= addToPlaylist(index);
-        }
+            index = varValue.value<int>();
+        else if (varValue.canConvert<QModelIndex>())
+            index = varValue.value<QModelIndex>().row();
+        else
+            continue;
+
+        ret |= addToPlaylist(index);
+    }
+    return ret;
+}
+
+bool NetworkMediaModel::addToPlaylist(const QModelIndexList &itemIdList)
+{
+    bool ret = false;
+    for (const QModelIndex& index: itemIdList)
+    {
+        if (!index.isValid())
+            continue;
+        ret |= addToPlaylist(index.row());
     }
     return ret;
 }
@@ -224,14 +258,35 @@ bool NetworkMediaModel::addAndPlay(const QVariantList& itemIdList)
     bool ret = false;
     for (const QVariant& varValue: itemIdList)
     {
+        int index = -1;
+
         if (varValue.canConvert<int>())
-        {
-            auto index = varValue.value<int>();
-            if (!ret)
-                ret |= addAndPlay(index);
-            else
-                ret |= addToPlaylist(index);
-        }
+            index = varValue.value<int>();
+        else if (varValue.canConvert<QModelIndex>())
+            index = varValue.value<QModelIndex>().row();
+        else
+            continue;
+
+        if (!ret)
+            ret |= addAndPlay(index);
+        else
+            ret |= addToPlaylist(index);
+    }
+    return ret;
+}
+
+bool NetworkMediaModel::addAndPlay(const QModelIndexList& itemIdList)
+{
+    bool ret = false;
+    for (const QModelIndex& index: itemIdList)
+    {
+        if (!index.isValid())
+            continue;
+
+        if (!ret)
+            ret |= addAndPlay(index.row());
+        else
+            ret |= addToPlaylist(index.row());
     }
     return ret;
 }
@@ -246,6 +301,7 @@ bool NetworkMediaModel::initializeMediaSources()
         beginResetModel();
         m_items.clear();
         endResetModel();
+        emit countChanged();
     }
 
     if (!m_treeItem)
@@ -360,6 +416,7 @@ void NetworkMediaModel::onItemRemoved(MediaSourcePtr, input_item_node_t * node,
             beginRemoveRows({}, idx, idx );
             m_items.erase( it );
             endRemoveRows();
+            emit countChanged();
         }
     }, Qt::QueuedConnection);
 }
@@ -424,6 +481,7 @@ void NetworkMediaModel::refreshMediaList( MediaSourcePtr mediaSource,
         endResetModel();
     else
         endInsertRows();
+    emit countChanged();
 }
 
 bool NetworkMediaModel::canBeIndexed(const QUrl& url , ItemType itemType )

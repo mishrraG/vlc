@@ -65,6 +65,8 @@ dvdnav_status_t dvdnav_jump_to_sector_by_time(dvdnav_t *, uint64_t, int32_t);
 #include "../demux/mpeg/ps.h"
 #include "../demux/timestamps_filter.h"
 
+#include "disc_helper.h"
+
 /*****************************************************************************
  * Module descriptor
  *****************************************************************************/
@@ -199,6 +201,61 @@ static void DvdNavLog( void *foo, dvdnav_logger_level_t i, const char *p, va_lis
 #endif
 
 /*****************************************************************************
+ *
+ *****************************************************************************/
+static const struct
+{
+    DVDMenuID_t dvdnav_id;
+    const char *psz_name;
+} menus_id_mapping[] = {
+    { DVD_MENU_Escape,     "Resume" },
+    { DVD_MENU_Root,       "Root" },
+    { DVD_MENU_Title,      "Title" },
+    { DVD_MENU_Part,       "Chapter" },
+    { DVD_MENU_Subpicture, "Subtitle" },
+    { DVD_MENU_Audio,      "Audio" },
+    { DVD_MENU_Angle,      "Angle" },
+};
+
+static int MenuIDToSeekpoint( DVDMenuID_t menuid, int *seekpoint )
+{
+    for( size_t i=0; i<ARRAY_SIZE(menus_id_mapping); i++ )
+    {
+        if( menus_id_mapping[i].dvdnav_id == menuid )
+        {
+            *seekpoint = i;
+            return VLC_SUCCESS;
+        }
+    }
+    return VLC_EGENERIC;
+}
+
+static int SeekpointToMenuID( int seekpoint, DVDMenuID_t *id )
+{
+    if( (size_t) seekpoint >= ARRAY_SIZE(menus_id_mapping) )
+        return VLC_EGENERIC;
+    *id = menus_id_mapping[seekpoint].dvdnav_id;
+    return VLC_SUCCESS;
+}
+
+static int CallRootTitleMenu( dvdnav_t *p_dvdnav,
+                              int *pi_title, int *pi_seekpoint )
+{
+    const DVDMenuID_t menuids[2] = { DVD_MENU_Title, DVD_MENU_Root };
+    for( int i=0; i<2; i++ )
+    {
+        if( dvdnav_menu_call( p_dvdnav, menuids[i] )
+            == DVDNAV_STATUS_OK )
+        {
+            *pi_title = 0;
+            MenuIDToSeekpoint( menuids[i], pi_seekpoint );
+            return VLC_SUCCESS;
+        }
+    }
+    return VLC_EGENERIC;
+}
+
+/*****************************************************************************
  * CommonOpen:
  *****************************************************************************/
 static int CommonOpen( vlc_object_t *p_this,
@@ -294,14 +351,9 @@ static int CommonOpen( vlc_object_t *p_this,
             return VLC_EGENERIC;
         }
 
-        if( dvdnav_menu_call( p_sys->dvdnav, DVD_MENU_Title ) !=
-            DVDNAV_STATUS_OK )
-        {
-            /* Try going to menu root */
-            if( dvdnav_menu_call( p_sys->dvdnav, DVD_MENU_Root ) !=
-                DVDNAV_STATUS_OK )
-                    msg_Warn( p_demux, "cannot go to dvd menu" );
-        }
+        if( CallRootTitleMenu( p_sys->dvdnav, &p_sys->cur_title,
+                                              &p_sys->cur_seekpoint ) )
+            msg_Warn( p_demux, "cannot go to dvd menu" );
     }
 
     i_angle = var_CreateGetInteger( p_demux, "dvdnav-angle" );
@@ -364,6 +416,9 @@ static int AccessDemuxOpen ( vlc_object_t *p_this )
     if( !forced && ProbeDVD( psz_file ) != VLC_SUCCESS )
         goto bailout;
 
+    if( forced && DiscProbeMacOSPermission( p_this, psz_file ) != VLC_SUCCESS )
+        goto bailout;
+
     /* Open dvdnav */
     psz_path = ToLocale( psz_file );
 #if DVDNAV_VERSION >= 60100
@@ -375,13 +430,6 @@ static int AccessDemuxOpen ( vlc_object_t *p_this )
 #endif
     {
         msg_Warn( p_demux, "cannot open DVD (%s)", psz_file);
-
-#ifdef __APPLE__
-        vlc_dialog_display_error( p_demux, _("Problem accessing a system resource"),
-            _("Potentially, macOS blocks access to your disc. "
-              "Please open \"System Preferences\" -> \"Security & Privacy\" "
-              "and allow VLC to access your external media in \"Files and Folders\" section."));
-#endif
         goto bailout;
     }
 
@@ -662,7 +710,10 @@ static int Control( demux_t *p_demux, int i_query, va_list args )
 
             p_sys->updates |= INPUT_UPDATE_TITLE | INPUT_UPDATE_SEEKPOINT;
             p_sys->cur_title = i;
-            p_sys->cur_seekpoint = 0;
+            if( i != 0 )
+                p_sys->cur_seekpoint = 0;
+            else
+                MenuIDToSeekpoint( DVD_MENU_Root, &p_sys->cur_seekpoint );
             RandomAccessCleanup( p_sys );
             return VLC_SUCCESS;
 
@@ -670,18 +721,9 @@ static int Control( demux_t *p_demux, int i_query, va_list args )
             i = va_arg( args, int );
             if( p_sys->cur_title == 0 )
             {
-                static const int argtab[] = {
-                    DVD_MENU_Escape,
-                    DVD_MENU_Root,
-                    DVD_MENU_Title,
-                    DVD_MENU_Part,
-                    DVD_MENU_Subpicture,
-                    DVD_MENU_Audio,
-                    DVD_MENU_Angle
-                };
-                enum { numargs = sizeof(argtab)/sizeof(int) };
-                if( (unsigned)i >= numargs || DVDNAV_STATUS_OK !=
-                           dvdnav_menu_call(p_sys->dvdnav,argtab[i]) )
+                DVDMenuID_t menuid;
+                if( SeekpointToMenuID(i, &menuid) ||
+                    dvdnav_menu_call(p_sys->dvdnav, menuid) != DVDNAV_STATUS_OK )
                     return VLC_EGENERIC;
             }
             else if( dvdnav_part_play( p_sys->dvdnav, p_sys->cur_title,
@@ -780,20 +822,13 @@ static int Control( demux_t *p_demux, int i_query, va_list args )
 
         case DEMUX_NAV_MENU:
         {
-            if( dvdnav_menu_call( p_sys->dvdnav, DVD_MENU_Title )
-                != DVDNAV_STATUS_OK )
+            if( CallRootTitleMenu( p_sys->dvdnav, &p_sys->cur_title,
+                                                  &p_sys->cur_seekpoint ) )
             {
-                msg_Warn( p_demux, "cannot select Title menu" );
-                if( dvdnav_menu_call( p_sys->dvdnav, DVD_MENU_Root )
-                    != DVDNAV_STATUS_OK )
-                {
-                    msg_Warn( p_demux, "cannot select Root menu" );
-                    return VLC_EGENERIC;
-                }
+                msg_Warn( p_demux, "cannot select Title/Root menu" );
+                return VLC_EGENERIC;
             }
             p_sys->updates |= INPUT_UPDATE_TITLE | INPUT_UPDATE_SEEKPOINT;
-            p_sys->cur_title = 0;
-            p_sys->cur_seekpoint = 2;
             break;
         }
 
@@ -1034,8 +1069,8 @@ static int Demux( demux_t *p_demux )
 
     case DVDNAV_CELL_CHANGE:
     {
-        int32_t i_title = 0;
-        int32_t i_part  = 0;
+        int32_t i_nav_title = 0;
+        int32_t i_nav_part  = 0;
 
         dvdnav_cell_change_event_t *event =
             (dvdnav_cell_change_event_t*)packet;
@@ -1057,20 +1092,30 @@ static int Demux( demux_t *p_demux )
             p_sys->tk[i].i_next_block_flags |= BLOCK_FLAG_CELL_DISCONTINUITY;
 
         /* FIXME is it correct or there is better way to know chapter change */
-        if( dvdnav_current_title_info( p_sys->dvdnav, &i_title,
-                                       &i_part ) == DVDNAV_STATUS_OK )
+        if( dvdnav_current_title_info( p_sys->dvdnav, &i_nav_title,
+                                       &i_nav_part ) == DVDNAV_STATUS_OK )
         {
-            if( i_title >= 0 && i_title < p_sys->i_title )
+            const int i_title = p_sys->cur_title;
+            const int i_seekpoint = p_sys->cur_seekpoint;
+            if( i_nav_title > 0 && i_nav_title < p_sys->i_title )
             {
-                p_sys->updates |= INPUT_UPDATE_TITLE;
-                p_sys->cur_title = i_title;
-
-                if( i_part >= 1 && i_part <= p_sys->title[i_title]->i_seekpoint )
-                {
-                    p_sys->updates |= INPUT_UPDATE_SEEKPOINT;
-                    p_sys->cur_seekpoint = i_part - 1;
-                }
+                p_sys->cur_title = i_nav_title;
+                if( i_nav_part > 0 &&
+                    i_nav_part <= p_sys->title[i_nav_title]->i_seekpoint )
+                    p_sys->cur_seekpoint = i_nav_part - 1;
+                else p_sys->cur_seekpoint = 0;
             }
+            else if( i_nav_title == 0 ) /* in menus, i_part == menu id */
+            {
+                if( MenuIDToSeekpoint( i_nav_part, &p_sys->cur_seekpoint ) )
+                    p_sys->cur_seekpoint = 0; /* non standard menu number, can't map back */
+                else
+                    p_sys->cur_title = 0;
+            }
+            if( i_title != p_sys->cur_title )
+                p_sys->updates |= INPUT_UPDATE_TITLE;
+            if( i_seekpoint != p_sys->cur_seekpoint )
+                p_sys->updates |= INPUT_UPDATE_SEEKPOINT;
         }
         break;
     }
@@ -1220,33 +1265,14 @@ static void DemuxTitles( demux_t *p_demux )
     t->i_flags = INPUT_TITLE_MENU | INPUT_TITLE_INTERACTIVE;
     t->psz_name = strdup( "DVD Menu" );
 
-    s = vlc_seekpoint_New();
-    s->psz_name = strdup( "Resume" );
-    TAB_APPEND( t->i_seekpoint, t->seekpoint, s );
-
-    s = vlc_seekpoint_New();
-    s->psz_name = strdup( "Root" );
-    TAB_APPEND( t->i_seekpoint, t->seekpoint, s );
-
-    s = vlc_seekpoint_New();
-    s->psz_name = strdup( "Title" );
-    TAB_APPEND( t->i_seekpoint, t->seekpoint, s );
-
-    s = vlc_seekpoint_New();
-    s->psz_name = strdup( "Chapter" );
-    TAB_APPEND( t->i_seekpoint, t->seekpoint, s );
-
-    s = vlc_seekpoint_New();
-    s->psz_name = strdup( "Subtitle" );
-    TAB_APPEND( t->i_seekpoint, t->seekpoint, s );
-
-    s = vlc_seekpoint_New();
-    s->psz_name = strdup( "Audio" );
-    TAB_APPEND( t->i_seekpoint, t->seekpoint, s );
-
-    s = vlc_seekpoint_New();
-    s->psz_name = strdup( "Angle" );
-    TAB_APPEND( t->i_seekpoint, t->seekpoint, s );
+    for( size_t i=0; i<ARRAY_SIZE(menus_id_mapping); i++ )
+    {
+        s = vlc_seekpoint_New();
+        if(!s)
+            break;
+        s->psz_name = strdup( menus_id_mapping[i].psz_name );
+        TAB_APPEND( t->i_seekpoint, t->seekpoint, s );
+    }
 
     TAB_APPEND( p_sys->i_title, p_sys->title, t );
 
@@ -1303,7 +1329,9 @@ static void ButtonUpdate( demux_t *p_demux, bool b_mode )
     if( !p_sys->spu_es )
         return;
 
-    dvdnav_current_title_info( p_sys->dvdnav, &i_title, &i_part );
+    if( dvdnav_current_title_info( p_sys->dvdnav, &i_title, &i_part )
+            != DVDNAV_STATUS_OK )
+        return;
 
     dvdnav_highlight_area_t hl;
     int32_t i_button;
@@ -1376,8 +1404,9 @@ static void ESSubtitleUpdate( demux_t *p_demux )
     ButtonUpdate( p_demux, false );
     vlc_mutex_unlock(&p_sys->event_lock);
 
-    dvdnav_current_title_info( p_sys->dvdnav, &i_title, &i_part );
-    if( i_title > 0 ) return;
+    if( dvdnav_current_title_info( p_sys->dvdnav, &i_title, &i_part )
+            != DVDNAV_STATUS_OK || i_title > 0 )
+        return;
 
     /* dvdnav_get_active_spu_stream sets (in)visibility flag as 0xF0 */
     if( i_spu >= 0 && i_spu <= 0x1f )
@@ -1604,8 +1633,8 @@ static void ESNew( demux_t *p_demux, int i_id )
                 16 * sizeof( uint32_t ) );
 
         /* We select only when we are not in the menu */
-        dvdnav_current_title_info( p_sys->dvdnav, &i_title, &i_part );
-        if( i_title > 0 &&
+        if( dvdnav_current_title_info( p_sys->dvdnav, &i_title, &i_part ) == DVDNAV_STATUS_OK &&
+            i_title > 0 &&
             dvdnav_get_active_spu_stream( p_sys->dvdnav ) == (i_id&0x1f) )
         {
             b_select = true;

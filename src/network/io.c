@@ -38,7 +38,7 @@
 #include <assert.h>
 
 #include <unistd.h>
-#ifdef HAVE_POLL
+#ifdef HAVE_POLL_H
 # include <poll.h>
 #endif
 #ifdef HAVE_LINUX_DCCP_H
@@ -74,6 +74,10 @@ int net_Socket (vlc_object_t *p_this, int family, int socktype,
         return -1;
     }
 
+#ifdef _WIN32
+    // Windows expects a BOOL for some getsockopt/setsockopt options
+    static_assert(sizeof(int)==sizeof(BOOL), "mismatching type for setsockopt");
+#endif
     setsockopt (fd, SOL_SOCKET, SO_REUSEADDR, &(int){ 1 }, sizeof (int));
 
 #ifdef IPV6_V6ONLY

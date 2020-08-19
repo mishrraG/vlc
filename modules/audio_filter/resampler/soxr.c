@@ -246,7 +246,11 @@ SoXR_Resample( filter_t *p_filter, soxr_t soxr, block_t *p_in, size_t i_olen )
         p_out = p_in;
     }
     else
+    {
         p_out = block_Alloc( i_olen * i_oframesize );
+        if( p_out == NULL )
+            goto error;
+    }
 
     soxr_error_t error = soxr_process( soxr, p_in ? p_in->p_buffer : NULL,
                                        i_ilen, &i_idone, p_out->p_buffer,
@@ -308,12 +312,13 @@ Resample( filter_t *p_filter, block_t *p_in )
         block_t *p_flushed_out = NULL, *p_out = NULL;
         const double f_ratio = p_filter->fmt_out.audio.i_rate
                              / (double) p_filter->fmt_in.audio.i_rate;
-        const size_t i_olen = SoXR_GetOutLen( p_in->i_nb_samples, f_ratio );
+        size_t i_olen = SoXR_GetOutLen( p_in->i_nb_samples,
+            f_ratio > p_sys->f_fixed_ratio ? f_ratio : p_sys->f_fixed_ratio );
 
         if( f_ratio != p_sys->f_fixed_ratio )
         {
             /* using variable resampler */
-            soxr_set_io_ratio( p_sys->vr_soxr, 1 / f_ratio, i_olen );
+            soxr_set_io_ratio( p_sys->vr_soxr, 1 / f_ratio, 0 /* instant change */ );
             soxr = p_sys->vr_soxr;
         }
         else if( f_ratio == 1.0f )

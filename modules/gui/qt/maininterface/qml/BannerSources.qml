@@ -223,7 +223,7 @@ Widgets.NavigableFocusScope {
 
                             popupAlignment: Qt.AlignLeft | Qt.AlignBottom
 
-                            visible: !!root.contentModel
+                            visible: root.sortModel !== undefined && root.sortModel.length > 1
                             enabled: visible
 
                             onSortSelected: {
@@ -303,7 +303,8 @@ Widgets.NavigableFocusScope {
                             iconText: VLCIcons.playlist
                             text: i18n.qtr("Playlist")
 
-                            onClicked:  rootWindow.playlistVisible = !rootWindow.playlistVisible
+                            onClicked:  mainInterface.playlistVisible = !mainInterface.playlistVisible
+                            color: mainInterface.playlistVisible && !playlist_btn.backgroundVisible ? VLCStyle.colors.accent : VLCStyle.colors.buttonText
                         }
                     }
 

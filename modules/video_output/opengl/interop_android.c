@@ -34,7 +34,6 @@
 struct priv
 {
     android_video_context_t *avctx;
-    AWindowHandler *awh;
     const float *transform_mtx;
     bool stex_attached;
 };
@@ -46,7 +45,8 @@ tc_anop_allocate_textures(const struct vlc_gl_interop *interop, GLuint *textures
     (void) tex_width; (void) tex_height;
     struct priv *priv = interop->priv;
     assert(textures[0] != 0);
-    if (SurfaceTexture_attachToGLContext(priv->awh, textures[0]) != 0)
+
+    if (SurfaceTexture_attachToGLContext(priv->avctx->texture, textures[0]) != 0)
     {
         msg_Err(interop->gl, "SurfaceTexture_attachToGLContext failed");
         return VLC_EGENERIC;
@@ -72,7 +72,7 @@ tc_anop_update(const struct vlc_gl_interop *interop, GLuint *textures,
     if (!priv->avctx->render(pic->context))
         return VLC_SUCCESS; /* already rendered */
 
-    if (SurfaceTexture_waitAndUpdateTexImage(priv->awh, &priv->transform_mtx)
+    if (SurfaceTexture_updateTexImage(priv->avctx->texture, &priv->transform_mtx)
         != VLC_SUCCESS)
     {
         priv->transform_mtx = NULL;
@@ -98,7 +98,7 @@ Close(struct vlc_gl_interop *interop)
     struct priv *priv = interop->priv;
 
     if (priv->stex_attached)
-        SurfaceTexture_detachFromGLContext(priv->awh);
+        SurfaceTexture_detachFromGLContext(priv->avctx->texture);
 
     free(priv);
 }
@@ -108,7 +108,7 @@ Open(vlc_object_t *obj)
 {
     struct vlc_gl_interop *interop = (void *) obj;
 
-    if (interop->fmt.i_chroma != VLC_CODEC_ANDROID_OPAQUE
+    if (interop->fmt_in.i_chroma != VLC_CODEC_ANDROID_OPAQUE
      || !interop->gl->surface->handle.anativewindow
      || !interop->vctx)
         return VLC_EGENERIC;
@@ -116,7 +116,7 @@ Open(vlc_object_t *obj)
     android_video_context_t *avctx =
         vlc_video_context_GetPrivate(interop->vctx, VLC_VIDEO_CONTEXT_AWINDOW);
 
-    if (avctx->id != AWindow_SurfaceTexture)
+    if (avctx == NULL || avctx->texture == NULL)
         return VLC_EGENERIC;
 
     interop->priv = malloc(sizeof(struct priv));
@@ -125,7 +125,6 @@ Open(vlc_object_t *obj)
 
     struct priv *priv = interop->priv;
     priv->avctx = avctx;
-    priv->awh = interop->gl->surface->handle.anativewindow;
     priv->transform_mtx = NULL;
     priv->stex_attached = false;
 
@@ -136,37 +135,6 @@ Open(vlc_object_t *obj)
         .close = Close,
     };
     interop->ops = &ops;
-
-    /* The transform Matrix (uSTMatrix) given by the SurfaceTexture is not
-     * using the same origin than us. Ask the caller to rotate textures
-     * coordinates, via the vertex shader, by forcing an orientation. */
-    switch (interop->fmt.orientation)
-    {
-        case ORIENT_TOP_LEFT:
-            interop->fmt.orientation = ORIENT_BOTTOM_LEFT;
-            break;
-        case ORIENT_TOP_RIGHT:
-            interop->fmt.orientation = ORIENT_BOTTOM_RIGHT;
-            break;
-        case ORIENT_BOTTOM_LEFT:
-            interop->fmt.orientation = ORIENT_TOP_LEFT;
-            break;
-        case ORIENT_BOTTOM_RIGHT:
-            interop->fmt.orientation = ORIENT_TOP_RIGHT;
-            break;
-        case ORIENT_LEFT_TOP:
-            interop->fmt.orientation = ORIENT_RIGHT_TOP;
-            break;
-        case ORIENT_LEFT_BOTTOM:
-            interop->fmt.orientation = ORIENT_RIGHT_BOTTOM;
-            break;
-        case ORIENT_RIGHT_TOP:
-            interop->fmt.orientation = ORIENT_LEFT_TOP;
-            break;
-        case ORIENT_RIGHT_BOTTOM:
-            interop->fmt.orientation = ORIENT_LEFT_BOTTOM;
-            break;
-    }
 
     int ret = opengl_interop_init(interop, GL_TEXTURE_EXTERNAL_OES,
                                   VLC_CODEC_RGB32,

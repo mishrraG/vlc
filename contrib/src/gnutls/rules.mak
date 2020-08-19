@@ -1,6 +1,6 @@
 # GnuTLS
 
-GNUTLS_VERSION := 3.6.7.1
+GNUTLS_VERSION := 3.6.14
 GNUTLS_URL := https://www.gnupg.org/ftp/gcrypt/gnutls/v3.6/gnutls-$(GNUTLS_VERSION).tar.xz
 
 ifdef BUILD_NETWORK
@@ -17,14 +17,25 @@ $(TARBALLS)/gnutls-$(GNUTLS_VERSION).tar.xz:
 
 .sum-gnutls: gnutls-$(GNUTLS_VERSION).tar.xz
 
-# gnutls 3.6.7.1 unpacks into a dir named 3.6.7
-gnutls: UNPACK_DIR=gnutls-3.6.7
 gnutls: gnutls-$(GNUTLS_VERSION).tar.xz .sum-gnutls
 	$(UNPACK)
-	$(APPLY) $(SRC)/gnutls/gnutls-pkgconfig-static.patch
-ifdef HAVE_WIN32
-	$(APPLY) $(SRC)/gnutls/gnutls-win32.patch
-endif
+	$(APPLY) $(SRC)/gnutls/gnutls-fix-mangling.patch
+
+	# backport gnulib patch
+	$(APPLY) $(SRC)/gnutls/0001-Don-t-assume-that-UNICODE-is-not-defined.patch
+
+	# fix forbidden UWP call which can't be upstreamed as they won't
+	# differentiate for winstore, only _WIN32_WINNT
+	$(APPLY) $(SRC)/gnutls/0001-fcntl-do-not-call-GetHandleInformation-in-Winstore-a.patch
+
+	# forbidden RtlSecureZeroMemory call in winstore builds
+	$(APPLY) $(SRC)/gnutls/0001-explicit_bzero-Do-not-call-SecureZeroMemory-on-UWP-b.patch
+
+	# disable the dllimport in static linking (pkg-config --static doesn't handle Cflags.private)
+	cd $(UNPACK_DIR) && sed -i.orig -e s/"_SYM_EXPORT __declspec(dllimport)"/"_SYM_EXPORT"/g lib/includes/gnutls/gnutls.h.in
+
+	# don't use connectx on macOS versions where it's not available
+	$(APPLY) $(SRC)/gnutls/0001-fix-connectx-not-available-on-older-macOS-SDK.patch
 ifdef HAVE_ANDROID
 	$(APPLY) $(SRC)/gnutls/no-create-time-h.patch
 endif
@@ -43,6 +54,7 @@ GNUTLS_CONF := \
 	--disable-nls \
 	--without-libintl-prefix \
 	--disable-doc \
+	--disable-tools \
 	--disable-tests \
 	--with-included-libtasn1 \
 	--with-included-unistring \

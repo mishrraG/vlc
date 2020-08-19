@@ -55,6 +55,7 @@
 #endif
 
 #include "../platform_fonts.h"
+#include "backends.h"
 
 #if !VLC_WINSTORE_APP
 #define FONT_DIR_NT  TEXT("SOFTWARE\\Microsoft\\Windows NT\\CurrentVersion\\Fonts")
@@ -329,13 +330,20 @@ done:
     return psz_result;
 }
 
+struct enumFontCallbackContext
+{
+    vlc_font_select_t *fs;
+    vlc_family_t *p_family;
+};
+
 static int CALLBACK EnumFontCallback(const ENUMLOGFONTEX *lpelfe, const NEWTEXTMETRICEX *metric,
                                      DWORD type, LPARAM lParam)
 {
     VLC_UNUSED( metric );
     if( (type & RASTER_FONTTYPE) ) return 1;
 
-    vlc_family_t *p_family = ( vlc_family_t * ) lParam;
+    struct enumFontCallbackContext *ctx = ( struct enumFontCallbackContext * ) lParam;
+    vlc_family_t *p_family = ctx->p_family;
 
     bool b_bold = ( lpelfe->elfLogFont.lfWeight == FW_BOLD );
     bool b_italic = ( lpelfe->elfLogFont.lfItalic != 0 );
@@ -373,16 +381,10 @@ static int CALLBACK EnumFontCallback(const ENUMLOGFONTEX *lpelfe, const NEWTEXTM
         psz_fontfile = psz_filename;
     else
     {
-        /* Get Windows Font folder */
-        char *psz_win_fonts_path = GetWindowsFontPath();
-        if( asprintf( &psz_fontfile, "%s\\%s", psz_win_fonts_path, psz_filename ) == -1 )
-        {
-            free( psz_filename );
-            free( psz_win_fonts_path );
-            return 1;
-        }
+        psz_fontfile = MakeFilePath( ctx->fs, psz_filename );
         free( psz_filename );
-        free( psz_win_fonts_path );
+        if( !psz_fontfile )
+            return 1;
     }
 
     NewFont( psz_fontfile, i_index, b_bold, b_italic, p_family );
@@ -390,24 +392,23 @@ static int CALLBACK EnumFontCallback(const ENUMLOGFONTEX *lpelfe, const NEWTEXTM
     return 1;
 }
 
-const vlc_family_t *Win32_GetFamily( filter_t *p_filter, const char *psz_family )
+const vlc_family_t *Win32_GetFamily( vlc_font_select_t *fs, const char *psz_family )
 {
-    filter_sys_t *p_sys = p_filter->p_sys;
     char *psz_lc = ToLower( psz_family );
 
     if( unlikely( !psz_lc ) )
         return NULL;
 
     vlc_family_t *p_family =
-        vlc_dictionary_value_for_key( &p_sys->family_map, psz_lc );
+        vlc_dictionary_value_for_key( &fs->family_map, psz_lc );
 
     free( psz_lc );
 
     if( p_family )
         return p_family;
 
-    p_family = NewFamily( p_filter, psz_family, &p_sys->p_families,
-                          &p_sys->family_map, psz_family );
+    p_family = NewFamily( fs, psz_family, &fs->p_families,
+                          &fs->family_map, psz_family );
 
     if( unlikely( !p_family ) )
         return NULL;
@@ -421,7 +422,10 @@ const vlc_family_t *Win32_GetFamily( filter_t *p_filter, const char *psz_family 
 
     /* */
     HDC hDC = GetDC( NULL );
-    EnumFontFamiliesEx(hDC, &lf, (FONTENUMPROC)&EnumFontCallback, (LPARAM)p_family, 0);
+    struct enumFontCallbackContext ctx;
+    ctx.fs = fs;
+    ctx.p_family = p_family;
+    EnumFontFamiliesEx(hDC, &lf, (FONTENUMPROC)&EnumFontCallback, (LPARAM)&ctx, 0);
     ReleaseDC(NULL, hDC);
 
     return p_family;
@@ -516,12 +520,11 @@ error:
     return NULL;
 }
 
-vlc_family_t *Win32_GetFallbacks( filter_t *p_filter, const char *psz_family,
+vlc_family_t *Win32_GetFallbacks( vlc_font_select_t *fs, const char *psz_family,
                                   uni_char_t codepoint )
 {
     vlc_family_t  *p_family      = NULL;
     vlc_family_t  *p_fallbacks   = NULL;
-    filter_sys_t  *p_sys         = p_filter->p_sys;
     char          *psz_uniscribe = NULL;
 
 
@@ -530,10 +533,10 @@ vlc_family_t *Win32_GetFallbacks( filter_t *p_filter, const char *psz_family,
     if( unlikely( !psz_lc ) )
         return NULL;
 
-    p_fallbacks = vlc_dictionary_value_for_key( &p_sys->fallback_map, psz_lc );
+    p_fallbacks = vlc_dictionary_value_for_key( &fs->fallback_map, psz_lc );
 
     if( p_fallbacks )
-        p_family = SearchFallbacks( p_filter, p_fallbacks, codepoint );
+        p_family = SearchFallbacks( fs, p_fallbacks, codepoint );
 
     /*
      * If the fallback list of psz_family has no family which contains the requested
@@ -548,16 +551,14 @@ vlc_family_t *Win32_GetFallbacks( filter_t *p_filter, const char *psz_family,
         if( !psz_uniscribe )
             goto done;
 
-        const vlc_family_t *p_uniscribe = Win32_GetFamily( p_filter, psz_uniscribe );
+        const vlc_family_t *p_uniscribe = Win32_GetFamily( fs, psz_uniscribe );
         if( !p_uniscribe || !p_uniscribe->p_fonts )
             goto done;
 
-        FT_Face p_face = GetFace( p_filter, p_uniscribe->p_fonts );
-
-        if( !p_face || !FT_Get_Char_Index( p_face, codepoint ) )
+        if( !CheckFace( fs, p_uniscribe->p_fonts, codepoint ) )
             goto done;
 
-        p_family = NewFamily( p_filter, psz_uniscribe, NULL, NULL, NULL );
+        p_family = NewFamily( fs, psz_uniscribe, NULL, NULL, NULL );
 
         if( unlikely( !p_family ) )
             goto done;
@@ -567,7 +568,7 @@ vlc_family_t *Win32_GetFallbacks( filter_t *p_filter, const char *psz_family,
         if( p_fallbacks )
             AppendFamily( &p_fallbacks, p_family );
         else
-            vlc_dictionary_insert( &p_sys->fallback_map,
+            vlc_dictionary_insert( &fs->fallback_map,
                                    psz_lc, p_family );
     }
 
@@ -577,24 +578,26 @@ done:
     return p_family;
 }
 
-char* Dummy_Select( filter_t *p_filter, const char* psz_font,
-                    bool b_bold, bool b_italic,
-                    int *i_idx, uni_char_t codepoint )
+char * MakeFilePath( vlc_font_select_t *fs, const char *psz_filename )
 {
-    VLC_UNUSED(p_filter);
-    VLC_UNUSED(b_bold);
-    VLC_UNUSED(b_italic);
-    VLC_UNUSED(codepoint);
-    VLC_UNUSED(i_idx);
+    VLC_UNUSED(fs);
 
-    char *psz_fontname;
+    if( !psz_filename )
+        return NULL;
+
+    /* FIXME test FQN */
+
     /* Get Windows Font folder */
-    char *psz_win_fonts_path = GetWindowsFontPath();
-    if( asprintf( &psz_fontname, "%s\\%s", psz_win_fonts_path, psz_font ) == -1 )
-        psz_fontname = NULL;
-    free(psz_win_fonts_path);
+    char *psz_fonts_path = GetWindowsFontPath();
 
-    return psz_fontname;
+    char *psz_filepath;
+    if( asprintf( &psz_filepath, "%s" DIR_SEP "%s",
+                  psz_fonts_path ? psz_fonts_path : "",
+                  psz_filename ) == -1 )
+        psz_filepath = NULL;
+    free( psz_fonts_path );
+
+    return psz_filepath;
 }
 
 #endif

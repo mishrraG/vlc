@@ -141,7 +141,7 @@ static libvlc_media_list_t *media_get_subitems( libvlc_media_t * p_md,
     vlc_mutex_lock( &p_md->subitems_lock );
     if( p_md->p_subitems == NULL && b_create )
     {
-        p_md->p_subitems = libvlc_media_list_new( p_md->p_libvlc_instance );
+        p_md->p_subitems = libvlc_media_list_new();
         if( p_md->p_subitems != NULL )
         {
             p_md->p_subitems->b_read_only = true;
@@ -181,19 +181,90 @@ static libvlc_media_t *input_item_add_subitem( libvlc_media_t *p_md,
     return p_md_child;
 }
 
-static void input_item_add_subnode( libvlc_media_t *md,
-                                    input_item_node_t *node )
+struct vlc_item_list
 {
-    for( int i = 0; i < node->i_children; i++ )
-    {
-        input_item_node_t *child = node->pp_children[i];
-        libvlc_media_t *md_child = input_item_add_subitem( md, child->p_item );
+    struct vlc_list node;
+    input_item_node_t *item;
+    libvlc_media_t *media;
+};
 
-        if( md_child != NULL )
+static struct vlc_item_list *
+wrap_item_in_list( libvlc_media_t *media, input_item_node_t *item )
+{
+    struct vlc_item_list *node = malloc( sizeof *node );
+    if( node == NULL )
+        return NULL;
+    node->item = item;
+    node->media = media;
+    return node;
+}
+
+static void input_item_add_subnode( libvlc_media_t *md,
+                                    input_item_node_t *root )
+{
+    struct vlc_list list;
+    vlc_list_init( &list );
+
+    /* Retain the media because we don't want the search algorithm to release
+     * it when its subitems get parsed. */
+    libvlc_media_retain(md);
+
+    struct vlc_item_list *node_root = wrap_item_in_list( md, root );
+    if( node_root == NULL )
+    {
+        libvlc_media_release(md);
+        goto error;
+    }
+
+    /* This is a depth-first search algorithm, so stash the root of the tree
+     * first, then stash its children and loop back on the last item in the
+     * list until the full subtree is parsed, and eventually the full tree is
+     * parsed. */
+    vlc_list_append( &node_root->node, &list );
+
+    while( !vlc_list_is_empty( &list ) )
+    {
+        /* Pop last item in the list. */
+        struct vlc_item_list *node =
+            vlc_list_last_entry_or_null( &list, struct vlc_item_list, node );
+        vlc_list_remove(&node->node);
+
+        for( int i = 0; i < node->item->i_children; i++ )
         {
-            input_item_add_subnode( md_child, child );
-            libvlc_media_release( md_child );
+            input_item_node_t *child = node->item->pp_children[i];
+
+            /* The media will be released when its children will be added to
+             * the list. */
+            libvlc_media_t *md_child = input_item_add_subitem( node->media, child->p_item );
+            if( md_child == NULL )
+                goto error;
+
+            struct vlc_item_list *submedia =
+                wrap_item_in_list( md_child, child );
+            if (submedia == NULL)
+            {
+                libvlc_media_release( md_child );
+                goto error;
+            }
+
+            /* Stash a request to parse this subtree. */
+            vlc_list_append( &submedia->node, &list );
         }
+
+        libvlc_media_release( node->media );
+        free( node );
+    }
+    return;
+
+error:
+    libvlc_printerr( "Not enough memory" );
+
+    struct vlc_item_list *node;
+    vlc_list_foreach( node, &list, node )
+    {
+        if( node->media != NULL )
+            libvlc_media_release( node->media );
+        free( node );
     }
 }
 
@@ -212,10 +283,6 @@ static void input_item_subtree_added(input_item_t *item,
 
 void libvlc_media_add_subtree(libvlc_media_t *p_md, input_item_node_t *node)
 {
-    /* FIXME FIXME FIXME
-     * Recursive function calls seem much simpler for this. But playlists are
-     * untrusted and can be arbitrarily deep (e.g. with XSPF). So recursion can
-     * potentially lead to plain old stack overflow. */
     input_item_add_subnode( p_md, node );
 
     /* Construct the event */
@@ -377,7 +444,7 @@ static void uninstall_input_item_observer( libvlc_media_t *p_md )
 /**
  * \internal
  * Create a new media descriptor object from an input_item (Private)
- * 
+ *
  * That's the generic constructor
  */
 libvlc_media_t * libvlc_media_new_from_input_item(
@@ -694,6 +761,7 @@ bool libvlc_media_get_stats(libvlc_media_t *p_md,
     p_stats->i_decoded_audio = p_itm_stats->i_decoded_audio;
 
     p_stats->i_displayed_pictures = p_itm_stats->i_displayed_pictures;
+    p_stats->i_late_pictures = p_itm_stats->i_late_pictures;
     p_stats->i_lost_pictures = p_itm_stats->i_lost_pictures;
 
     p_stats->i_played_abuffers = p_itm_stats->i_played_abuffers;
@@ -875,84 +943,40 @@ libvlc_media_tracks_get( libvlc_media_t *p_md, libvlc_media_track_t *** pp_es )
     /* Fill array */
     for( int i = 0; i < i_es; i++ )
     {
-        libvlc_media_track_t *p_mes = calloc( 1, sizeof(*p_mes) );
-        if ( p_mes )
-        {
-            p_mes->audio = malloc( __MAX(__MAX(sizeof(*p_mes->audio),
-                                               sizeof(*p_mes->video)),
-                                               sizeof(*p_mes->subtitle)) );
-        }
-        if ( !p_mes || !p_mes->audio )
+        libvlc_media_trackpriv_t *p_trackpriv = calloc( 1, sizeof(*p_trackpriv) );
+        if ( !p_trackpriv )
         {
             libvlc_media_tracks_release( *pp_es, i_es );
             *pp_es = NULL;
-            free( p_mes );
             vlc_mutex_unlock( &p_input_item->lock );
             return 0;
         }
+        libvlc_media_track_t *p_mes = &p_trackpriv->t;
         (*pp_es)[i] = p_mes;
 
         const es_format_t *p_es = p_input_item->es[i];
 
-        p_mes->i_codec = p_es->i_codec;
-        p_mes->i_original_fourcc = p_es->i_original_fourcc;
-        p_mes->i_id = p_es->i_id;
-
-        p_mes->i_profile = p_es->i_profile;
-        p_mes->i_level = p_es->i_level;
-
-        p_mes->i_bitrate = p_es->i_bitrate;
-        p_mes->psz_language = p_es->psz_language != NULL ? strdup(p_es->psz_language) : NULL;
-        p_mes->psz_description = p_es->psz_description != NULL ? strdup(p_es->psz_description) : NULL;
-
-        switch(p_es->i_cat)
-        {
-        case UNKNOWN_ES:
-        default:
-            p_mes->i_type = libvlc_track_unknown;
-            break;
-        case VIDEO_ES:
-            p_mes->i_type = libvlc_track_video;
-            p_mes->video->i_height = p_es->video.i_visible_height;
-            p_mes->video->i_width = p_es->video.i_visible_width;
-            p_mes->video->i_sar_num = p_es->video.i_sar_num;
-            p_mes->video->i_sar_den = p_es->video.i_sar_den;
-            p_mes->video->i_frame_rate_num = p_es->video.i_frame_rate;
-            p_mes->video->i_frame_rate_den = p_es->video.i_frame_rate_base;
-
-            assert( p_es->video.orientation >= ORIENT_TOP_LEFT &&
-                    p_es->video.orientation <= ORIENT_RIGHT_BOTTOM );
-            p_mes->video->i_orientation = (int) p_es->video.orientation;
-
-            assert( ( p_es->video.projection_mode >= PROJECTION_MODE_RECTANGULAR &&
-                    p_es->video.projection_mode <= PROJECTION_MODE_EQUIRECTANGULAR ) ||
-                    ( p_es->video.projection_mode == PROJECTION_MODE_CUBEMAP_LAYOUT_STANDARD ) );
-            p_mes->video->i_projection = (int) p_es->video.projection_mode;
-
-            p_mes->video->pose.f_yaw = p_es->video.pose.yaw;
-            p_mes->video->pose.f_pitch = p_es->video.pose.pitch;
-            p_mes->video->pose.f_roll = p_es->video.pose.roll;
-            p_mes->video->pose.f_field_of_view = p_es->video.pose.fov;
-
-            assert( p_es->video.multiview_mode >= MULTIVIEW_2D &&
-                    p_es->video.multiview_mode <= MULTIVIEW_STEREO_CHECKERBOARD );
-            p_mes->video->i_multiview = (int) p_es->video.multiview_mode;
-            break;
-        case AUDIO_ES:
-            p_mes->i_type = libvlc_track_audio;
-            p_mes->audio->i_channels = p_es->audio.i_channels;
-            p_mes->audio->i_rate = p_es->audio.i_rate;
-            break;
-        case SPU_ES:
-            p_mes->i_type = libvlc_track_text;
-            p_mes->subtitle->psz_encoding = p_es->subs.psz_encoding != NULL ?
-                                            strdup(p_es->subs.psz_encoding) : NULL;
-            break;
-        }
+        libvlc_media_trackpriv_from_es( p_trackpriv, p_es );
     }
 
     vlc_mutex_unlock( &p_input_item->lock );
     return i_es;
+}
+
+libvlc_media_tracklist_t *
+libvlc_media_get_tracklist( libvlc_media_t *p_md, libvlc_track_type_t type )
+{
+    assert( p_md );
+
+    input_item_t *p_input_item = p_md->p_input_item;
+
+    vlc_mutex_lock( &p_input_item->lock );
+    libvlc_media_tracklist_t *list =
+        libvlc_media_tracklist_from_es_array( p_input_item->es,
+                                              p_input_item->i_es, type );
+    vlc_mutex_unlock( &p_input_item->lock );
+
+    return list;
 }
 
 // Get codec description from media elementary stream
@@ -960,18 +984,8 @@ const char *
 libvlc_media_get_codec_description( libvlc_track_type_t i_type,
                                     uint32_t i_codec )
 {
-    switch( i_type )
-    {
-        case libvlc_track_audio:
-            return vlc_fourcc_GetDescription( AUDIO_ES, i_codec );
-        case libvlc_track_video:
-            return vlc_fourcc_GetDescription( VIDEO_ES, i_codec );
-        case libvlc_track_text:
-            return vlc_fourcc_GetDescription( SPU_ES, i_codec );
-        case libvlc_track_unknown:
-        default:
-            return vlc_fourcc_GetDescription( UNKNOWN_ES, i_codec );
-    }
+    return vlc_fourcc_GetDescription( libvlc_track_type_to_escat( i_type),
+                                      i_codec );
 }
 
 // Release media descriptor's elementary streams description array
@@ -981,22 +995,7 @@ void libvlc_media_tracks_release( libvlc_media_track_t **p_tracks, unsigned i_co
     {
         if ( !p_tracks[i] )
             continue;
-        free( p_tracks[i]->psz_language );
-        free( p_tracks[i]->psz_description );
-        switch( p_tracks[i]->i_type )
-        {
-        case libvlc_track_audio:
-            break;
-        case libvlc_track_video:
-            break;
-        case libvlc_track_text:
-            free( p_tracks[i]->subtitle->psz_encoding );
-            break;
-        case libvlc_track_unknown:
-        default:
-            break;
-        }
-        free( p_tracks[i]->audio );
+        libvlc_media_track_clean( p_tracks[i] );
         free( p_tracks[i] );
     }
     free( p_tracks );

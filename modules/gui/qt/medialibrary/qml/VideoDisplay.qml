@@ -32,7 +32,7 @@ Widgets.NavigableFocusScope {
     //the index to "go to" when the view is loaded
     property var initialIndex: 0
 
-    property alias contentModel: videosDelegate.model;
+    property alias contentModel: videoModel ;
 
     navigationCancel: function() {
         if (view.currentItem.currentIndex <= 0) {
@@ -51,21 +51,25 @@ Widgets.NavigableFocusScope {
     onContentModelChanged: resetFocus()
 
     function resetFocus() {
-        if (videosDelegate.items.count === 0) {
+        if (videoModel.count === 0) {
             return
         }
         var initialIndex = root.initialIndex
-        if (initialIndex >= videosDelegate.items.count)
+        if (initialIndex >= videoModel.count)
             initialIndex = 0
-        videosDelegate.selectNone()
-        videosDelegate.items.get(initialIndex).inSelected = true
-        view.currentItem.currentIndex = initialIndex
+        selectionModel.select(videoModel.index(initialIndex, 0), ItemSelectionModel.ClearAndSelect)
         view.currentItem.positionViewAtIndex(initialIndex, ItemView.Contain)
+    }
+
+    function _actionAtIndex(index) {
+        medialib.addAndPlay( videoModel.getIdsForIndexes( selectionModel.selectedIndexes ) )
+        history.push(["player"])
     }
 
     Widgets.MenuExt {
         id: contextMenu
         property var model: ({})
+        property int itemIndex: -1
         closePolicy: Popup.CloseOnReleaseOutside | Popup.CloseOnEscape
 
         Widgets.MenuItemExt {
@@ -92,7 +96,7 @@ Widgets.NavigableFocusScope {
             enabled: medialib.gridView
             text: "Information"
             onTriggered: {
-                view.currentItem.switchExpandItem(contextMenu.model.index)
+                view.currentItem.switchExpandItem(contextMenu.itemIndex)
             }
         }
         Widgets.MenuItemExt {
@@ -113,30 +117,21 @@ Widgets.NavigableFocusScope {
         onClosed: contextMenu.parent.forceActiveFocus()
 
     }
-    Util.SelectableDelegateModel {
-        id: videosDelegate
 
-        model: MLVideoModel {
-            id: videoModel
-            ml: medialib
-        }
-        delegate: Package{
-            Item { Package.name: "grid" }
-        }
+    MLVideoModel {
+        id: videoModel
+        ml: medialib
 
         onCountChanged: {
-            if (videosDelegate.items.count > 0 && videosDelegate.selectedGroup.count === 0) {
+            if (videoModel.count > 0 && !selectionModel.hasSelection) {
                 root.resetFocus()
             }
         }
+    }
 
-        function actionAtIndex(index) {
-            var list = []
-            for (var i = 0; i < videosDelegate.selectedGroup.count; i++)
-                list.push(videosDelegate.selectedGroup.get(i).model.id)
-            medialib.addAndPlay( list )
-            history.push(["player"])
-        }
+    Util.SelectableDelegateModel {
+        id: selectionModel
+        model: videoModel
     }
 
     Component {
@@ -147,39 +142,43 @@ Widgets.NavigableFocusScope {
             property Item currentItem: Item{}
 
             activeFocusOnTab:true
-            delegateModel: videosDelegate
+            delegateModel: selectionModel
             model: videoModel
 
-            headerDelegate: Widgets.LabelSeparator {
-                id: videosSeparator
-                width: videosGV.width
+            headerDelegate: Widgets.SubtitleLabel {
                 text: i18n.qtr("Videos")
+                leftPadding: videosGV.rowX
+                topPadding: VLCStyle.margin_large
+                bottomPadding: VLCStyle.margin_normal
+                width: root.width
             }
-
 
             delegate: VideoGridItem {
                 id: videoGridItem
 
+                opacity: videosGV.expandIndex !== -1 && videosGV.expandIndex !== videoGridItem.index ? .7 : 1
+
                 onContextMenuButtonClicked: {
                     contextMenu.model = videoGridItem.model
+                    contextMenu.itemIndex = index
                     contextMenu.popup()
                 }
 
                 onItemClicked : {
-                    videosDelegate.updateSelection( modifier , videosGV.currentIndex, index)
+                    selectionModel.updateSelection( modifier , videosGV.currentIndex, index)
                     videosGV.currentIndex = index
                     videosGV.forceActiveFocus()
+                }
+
+                Behavior on opacity {
+                    NumberAnimation {
+                        duration: 100
+                    }
                 }
             }
 
             expandDelegate: VideoInfoExpandPanel {
-                visible: !videosGV.isAnimating
-
-                implicitHeight: videosGV.height - videosGV.cellHeight
-                width: videosGV.width
-
                 onRetract: videosGV.retract()
-                notchPosition: videosGV.getItemPos(videosGV._expandIndex)[0] + (videosGV.cellWidth / 2)
 
                 navigationParent: videosGV
                 navigationCancel:  function() {  videosGV.retract() }
@@ -191,21 +190,21 @@ Widgets.NavigableFocusScope {
 
             /*
              *define the intial position/selection
-             * This is done on activeFocus rather than Component.onCompleted because videosDelegate.
+             * This is done on activeFocus rather than Component.onCompleted because selectionModel.
              * selectedGroup update itself after this event
              */
             onActiveFocusChanged: {
-                if (activeFocus && videosDelegate.items.count > 0 && videosDelegate.selectedGroup.count === 0) {
-                    videosDelegate.items.get(0).inSelected = true
+                if (activeFocus && videoModel.count > 0 && !selectionModel.hasSelection) {
+                    selectionModel.select(videoModel.index(0,0), ItemSelectionModel.ClearAndSelect)
                 }
             }
 
             cellWidth: VLCStyle.gridItem_video_width
             cellHeight: VLCStyle.gridItem_video_height
 
-            onSelectAll:videosDelegate.selectAll()
-            onSelectionUpdated: videosDelegate.updateSelection( keyModifiers, oldIndex, newIndex )
-            onActionAtIndex: videosDelegate.actionAtIndex( index )
+            onSelectAll:selectionModel.selectAll()
+            onSelectionUpdated: selectionModel.updateSelection( keyModifiers, oldIndex, newIndex )
+            onActionAtIndex: _actionAtIndex( index )
         }
 
     }
@@ -216,6 +215,7 @@ Widgets.NavigableFocusScope {
         VideoListDisplay {
             height: view.height
             width: view.width
+            model: videoModel
             onContextMenuButtonClicked:{
                 contextMenu.model = menuModel
                 contextMenu.popup(menuParent)
@@ -234,7 +234,7 @@ Widgets.NavigableFocusScope {
         id: view
         anchors.fill:parent
         clip: true
-        focus: videosDelegate.items.count !== 0
+        focus: videoModel.count !== 0
         initialItem: medialib.gridView ? gridComponent : listComponent
         Connections {
             target: medialib
@@ -250,7 +250,7 @@ Widgets.NavigableFocusScope {
 
     EmptyLabel {
         anchors.fill: parent
-        visible: videosDelegate.items.count === 0
+        visible: videoModel.count === 0
         focus: visible
         text: i18n.qtr("No video found\nPlease try adding sources, by going to the Network tab")
         navigationParent: root

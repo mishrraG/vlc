@@ -28,6 +28,7 @@
 #include "playlist_common.hpp"
 #include "playlist_item.hpp"
 #include "util/selectable_list_model.hpp"
+#include "util/vlctick.hpp"
 
 namespace vlc {
 namespace playlist {
@@ -39,6 +40,7 @@ class PlaylistListModel : public SelectableListModel
     Q_PROPERTY(PlaylistPtr playlistId READ getPlaylistId WRITE setPlaylistId NOTIFY playlistIdChanged)
     Q_PROPERTY(int currentIndex READ getCurrentIndex NOTIFY currentIndexChanged)
     Q_PROPERTY(int count READ rowCount NOTIFY countChanged)
+    Q_PROPERTY(VLCTick duration READ getDuration NOTIFY countChanged)
 
 public:
     enum Roles
@@ -58,11 +60,12 @@ public:
 
     QHash<int, QByteArray> roleNames() const override;
     int rowCount(const QModelIndex &parent = {}) const override;
+    VLCTick getDuration() const;
     QVariant data(const QModelIndex &index,
                   int role = Qt::DisplayRole) const override;
 
     /* provided for convenience */
-    const PlaylistItem &itemAt(int index) const;
+    Q_INVOKABLE PlaylistItem itemAt(int index) const;
 
     Q_INVOKABLE virtual void removeItems(const QList<int> &indexes);
     Q_INVOKABLE virtual void moveItemsPre(const QList<int> &indexes, int preTarget);

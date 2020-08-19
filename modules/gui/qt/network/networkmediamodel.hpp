@@ -96,7 +96,7 @@ public:
     Q_PROPERTY(bool indexed READ isIndexed WRITE setIndexed NOTIFY isIndexedChanged)
     Q_PROPERTY(bool canBeIndexed READ canBeIndexed NOTIFY canBeIndexedChanged)
     Q_PROPERTY(bool parsingPending READ getParsingPending NOTIFY parsingPendingChanged)
-
+    Q_PROPERTY(int count READ getCount NOTIFY countChanged)
 
     explicit NetworkMediaModel(QObject* parent = nullptr);
     NetworkMediaModel( QmlMainContext* ctx, QString parentMrl, QObject* parent = nullptr );
@@ -122,11 +122,16 @@ public:
     inline bool isIndexed() const { return m_indexed; }
     inline bool canBeIndexed() const { return m_canBeIndexed; }
     inline bool getParsingPending() const { return m_parsingPending; }
+    int getCount() const;
+
+    Q_INVOKABLE QMap<QString, QVariant> getDataAt(int idx);
 
     Q_INVOKABLE bool addToPlaylist( int index );
     Q_INVOKABLE bool addToPlaylist(const QVariantList& itemIdList);
+    Q_INVOKABLE bool addToPlaylist(const QModelIndexList& itemIdList);
     Q_INVOKABLE bool addAndPlay( int index );
     Q_INVOKABLE bool addAndPlay(const QVariantList& itemIdList);
+    Q_INVOKABLE bool addAndPlay(const QModelIndexList& itemIdList);
 
 signals:
     void nameChanged();
@@ -135,6 +140,7 @@ signals:
     void isIndexedChanged();
     void canBeIndexedChanged();
     void parsingPendingChanged(bool);
+    void countChanged();
 
     void ctxChanged();
     void treeChanged();

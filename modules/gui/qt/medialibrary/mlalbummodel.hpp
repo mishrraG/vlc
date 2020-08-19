@@ -42,7 +42,11 @@ public:
         ALBUM_COVER,
         ALBUM_MAIN_ARTIST,
         ALBUM_NB_TRACKS,
-        ALBUM_DURATION
+        ALBUM_DURATION,
+        ALBUM_DURATION_SHORT,
+
+        ALBUM_TITLE_FIRST_SYMBOL,
+        ALBUM_MAIN_ARTIST_FIRST_SYMBOL
     };
     Q_ENUM(Roles)
 
